@@ -209,7 +209,7 @@ A stack per farm next to its MCloud (not one for all the farms: the farms of dif
 | on the device host | go-ios: supervision, the profile, `ios pair`, Developer Mode | adb: `android/enroll.sh`, `android/release.sh` |
 | the device | supervised (`ios prepare`, it erases) once | no account, a single user; no factory reset |
 
-`proxy.conf` is the MDM part of stf-proxy ([MCloud and mcloud-agent](#mcloud-and-mcloud-agent)): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its nodes leave it by them); the API of NanoHUB, the device listener of mcloud-mdm and the web panel of Headwind MDM stay inside; the admin UI is `/mcloud/mdm/` for the admins of STF (LDAP).
+`proxy.conf` is the MDM part of stf-proxy ([MCloud and mcloud-agent](#mcloud-and-mcloud-agent)): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its nodes leave it by them); the API of NanoHUB, the device listener of mcloud-mdm and the web panel of Headwind MDM stay inside; the admin UI is an ssh tunnel by default, optionally `/mcloud/mdm/` for the admins of STF (LDAP).
 
 ## MCloud and mcloud-agent
 
@@ -220,7 +220,7 @@ MCloud (zebrunner/mcloud):
 - the compose profile `mdm` (as `adb-relay`): `mdm`, `mdm-nanohub`, `mdm-mysql`, `hmdm`, `hmdm-postgres`, `hmdm-init`, switched on by `MDM_ENABLED=true` of `.env`; the image tags in `TAG_*`;
 - `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`; `MDM_PUBLIC_URL` is `STF_URL`;
 - stf-proxy: the locations of `proxy.conf` (the addresses of the site and `MDM_ENROLL_TOKEN` rendered by the setup), its stream server on 31443 with the certificate of stf-proxy (`configuration/stf-proxy/ssl`), port 31443 published; a farm whose TLS ends before stf-proxy (a load balancer) terminates 31443 there too;
-- the admin UI `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF); `Host: $http_host` (the UI compares it with the Origin of its POSTs).
+- the admin UI on `127.0.0.1:${MDM_ADMIN_PORT}` (9101) of the server only, by default: an ssh tunnel (`ssh -L 9101:127.0.0.1:9101 <server>`, then `http://127.0.0.1:9101`); optionally (`MDM_ADMIN_PUBLIC=true`) `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF) with `Host: $http_host` (the UI compares it with the Origin of its POSTs).
 
 mcloud-agent (zebrunner/mcloud-agent): `zebrunner-farm mdm <enroll|release|status> <udid>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. The commands run in the connector of the device (`docker exec device-<name>-<udid>-connector`):
 
@@ -237,7 +237,7 @@ Per farm (a test farm first):
 1. The public addresses of the site: `curl ifconfig.me` from a node and from a device on the Wi-Fi of the farm. A device in the network of the server of MCloud may reach it by its private address: add that network too, and check the NAT loopback to the public address.
 2. Port 31443/tcp of the server of MCloud open for the addresses of the site (a firewall, a security group of AWS); 443 is open already.
 3. `MDM_ENABLED=true`, the addresses of the site, `./zebrunner.sh setup` (it generates `mdm.env`); keep `mdm.env` in the store of the secrets too: without `HMDM_SHARED_SECRET` and the server the device owner goes with a factory reset only.
-4. `./zebrunner.sh start`; the checks: from another address `/mdm`, `/hmdm/...` and 31443 refuse; from the site `/android/agent.apk` answers, `openssl s_client -connect <farm>:31443` verifies; `/hmdm/` (the web panel) answers 404; `/mcloud/mdm/` asks for the sign-in of STF.
+4. `./zebrunner.sh start`; the checks: from another address `/mdm`, `/hmdm/...` and 31443 refuse; from the site `/android/agent.apk` answers, `openssl s_client -connect <farm>:31443` verifies; `/hmdm/` (the web panel) answers 404; the admin UI answers through the ssh tunnel (`/mcloud/mdm/` asks for the sign-in of STF when it is published).
 5. The admin UI, iOS: the push certificate.
 6. The supervision identity of the farm on its nodes.
 7. Android: the accounts (Google) off the devices, `zebrunner-farm mdm enroll <udid>`; the admin UI shows the device owner and a fresh sync.
