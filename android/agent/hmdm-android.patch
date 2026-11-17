@@ -69,12 +69,76 @@ index 8d9a16f..45682e5 100644
                  } catch (Exception e) {
                  }
 
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
+new file mode 100644
+index 0000000..7332e89
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
+@@ -0,0 +1,58 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import com.hmdm.launcher.helper.SettingsHelper;
++
++import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
++
++import javax.net.ssl.HttpsURLConnection;
++import javax.net.ssl.SSLSocketFactory;
++
++/**
++ * MCloud: MQTT over TLS when the server is https: ssl://<host of the server>:<mqttPort of the setup>, the certificate
++ * checked by the trust of the device (the network security config: the system CAs and a CA of the setup) and its
++ * host name verified. A plain http server keeps tcp:// (a lab).
++ */
++public final class Mqtt {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY_PORT = "mqttPort";
++
++    private Mqtt() {
++    }
++
++    static void savePort(Context context, int port) {
++        prefs(context).edit().putInt(KEY_PORT, port).commit();
++    }
++
++    static int port(Context context) {
++        return prefs(context).getInt(KEY_PORT, 0);
++    }
++
++    public static boolean tls(Context context) {
++        SettingsHelper settings = SettingsHelper.getInstance(context);
++        return settings.isBaseUrlSet() && settings.getBaseUrl().startsWith("https://");
++    }
++
++    /** uri is the MQTT server: the host of the server, the port of the setup (or the default one). */
++    public static String uri(Context context, String host, int defaultPort) {
++        int port = port(context);
++        if (port <= 0) {
++            port = defaultPort;
++        }
++        return (tls(context) ? "ssl://" : "tcp://") + host + ":" + port;
++    }
++
++    public static void configure(Context context, MqttConnectOptions options) {
++        if (tls(context)) {
++            options.setSocketFactory(SSLSocketFactory.getDefault());
++            options.setSSLHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
++        }
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Release.java b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
 new file mode 100644
-index 0000000..5095032
+index 0000000..9696070
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,42 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.app.admin.DevicePolicyManager;
@@ -109,6 +173,8 @@ index 0000000..5095032
 +            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
 +                dpm.clearResetPasswordToken(com.hmdm.launcher.util.LegacyUtils.getAdminComponentName(context));
 +            }
++            // the CA of the setup goes with the device owner
++            TrustedCa.uninstall(context);
 +            dpm.clearDeviceOwnerApp(context.getPackageName());
 +        } catch (Exception e) {
 +            RemoteLogger.log(context, Const.LOG_ERROR, "Release failed: " + android.util.Log.getStackTraceString(e));
@@ -179,10 +245,10 @@ index 0000000..dcc568e
 +}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
 new file mode 100644
-index 0000000..d25e7c5
+index 0000000..e6e5e33
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,132 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.content.ContentProvider;
@@ -199,7 +265,9 @@ index 0000000..d25e7c5
 + * MCloud: configures and releases the agent over adb without the screen.
 + *
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup \
-+ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SECRET --extra token:s:SECRET
++ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SECRET --extra token:s:SECRET \
++ *     [--extra mqttPort:i:31443] [--extra ca:s:BASE64_OF_THE_CA]
++ * (MQTT is ssl:// on the host of the server for an https server; ca: the CA of a private certificate, a lab)
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:SECRET
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method status
 + * (the url goes in --arg: "content" refuses colons in the values of --extra)
@@ -257,6 +325,15 @@ index 0000000..d25e7c5
 +            settings.setServerProject(extras.getString("serverProject", ""));
 +            settings.setDeviceId(deviceId.trim());
 +            Secret.save(getContext(), secret);
++            int mqttPort = extras.getInt("mqttPort", 0);
++            if (mqttPort < 0 || mqttPort > 65535) {
++                throw new IllegalArgumentException("mqttPort: 1-65535");
++            }
++            Mqtt.savePort(getContext(), mqttPort);
++            String ca = extras.getString("ca");
++            if (ca != null && !ca.isEmpty() && !TrustedCa.install(getContext(), ca)) {
++                throw new IllegalStateException("the CA is not installed (the agent must be the device owner)");
++            }
 +        } else if ("release".equals(method)) {
 +            if (!Secret.isSet(getContext())) {
 +                throw new SecurityException("the agent has no secret: it was never set up");
@@ -273,6 +350,9 @@ index 0000000..d25e7c5
 +        result.putString("deviceId", settings.getDeviceId());
 +        result.putBoolean("configLoaded", settings.getConfig() != null);
 +        result.putBoolean("secretSet", Secret.isSet(getContext()));
++        result.putString("mqtt", settings.isBaseUrlSet() ? Mqtt.uri(getContext(), Uri.parse(settings.getBaseUrl()).getHost(),
++                com.hmdm.launcher.BuildConfig.MQTT_PORT) : null);
++        result.putBoolean("caInstalled", TrustedCa.installed(getContext()));
 +        return result;
 +    }
 +
@@ -299,6 +379,76 @@ index 0000000..d25e7c5
 +    @Override
 +    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
 +        return 0;
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
+new file mode 100644
+index 0000000..f375ff7
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
+@@ -0,0 +1,64 @@
++package com.hmdm.launcher.mcloud;
++
++import android.app.admin.DevicePolicyManager;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.util.Base64;
++
++import com.hmdm.launcher.util.LegacyUtils;
++
++/**
++ * MCloud: the CA of a server with a private certificate (a lab), installed by the device owner as a user CA without
++ * a prompt; the network security config of the agent trusts the user CAs. Removed again by the release.
++ */
++final class TrustedCa {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY = "ca";
++
++    private TrustedCa() {
++    }
++
++    /** install installs the CA (base64 of the DER or of the PEM) and returns true when it is installed. */
++    static boolean install(Context context, String base64) {
++        byte[] cert = Base64.decode(base64, Base64.DEFAULT);
++        String text = new String(cert, java.nio.charset.StandardCharsets.US_ASCII);
++        if (text.contains("-----BEGIN CERTIFICATE-----")) {
++            String body = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
++            cert = Base64.decode(body, Base64.DEFAULT);
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        boolean ok = dpm.installCaCert(LegacyUtils.getAdminComponentName(context), cert);
++        if (ok) {
++            prefs(context).edit().putString(KEY, Base64.encodeToString(cert, Base64.NO_WRAP)).commit();
++        }
++        return ok;
++    }
++
++    static boolean installed(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null) {
++            return false;
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        try {
++            return dpm.hasCaCertInstalled(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
++        } catch (SecurityException e) {
++            return false;
++        }
++    }
++
++    static void uninstall(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null) {
++            return;
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        dpm.uninstallCaCert(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
++        prefs(context).edit().remove(KEY).commit();
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +    }
 +}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Watchdog.java b/app/src/main/java/com/hmdm/launcher/mcloud/Watchdog.java
@@ -450,18 +600,22 @@ index fd9a389..0cf8eec 100644
          }
          return null;
 diff --git a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
-index a3f58c1..23ad09d 100644
+index a3f58c1..d0f2d47 100644
 --- a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
 +++ b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
-@@ -111,7 +111,7 @@ public class PushNotificationMqttWrapper {
+@@ -111,8 +111,10 @@ public class PushNotificationMqttWrapper {
              connectOptions.setKeepAliveInterval(keepaliveTime);
          }
          connectOptions.setUserName("hmdm");
 -        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + BuildConfig.REQUEST_SIGNATURE).toCharArray());
+-        String serverUri = "tcp://" + host + ":" + port;
 +        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + com.hmdm.launcher.mcloud.Secret.value()).toCharArray());
-         String serverUri = "tcp://" + host + ":" + port;
++        // MCloud: ssl:// for an https server, the port of the setup
++        com.hmdm.launcher.mcloud.Mqtt.configure(context, connectOptions);
++        String serverUri = com.hmdm.launcher.mcloud.Mqtt.uri(context, host, port);
 
          if (client != null) {
+             // Here we go after reconnection.
 diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
 index a075f23..cf3ea8b 100644
 --- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java

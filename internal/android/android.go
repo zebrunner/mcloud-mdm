@@ -4,6 +4,7 @@ package android
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -98,7 +99,10 @@ type Manager struct {
 	// PublicURL is the URL of Headwind MDM the agents reach, Secret its shared secret (SHARED_SECRET)
 	PublicURL string
 	Secret    string
-	Now       func() time.Time
+	// MQTTPort is the MQTT port of the agents (TLS for an https PublicURL), CA the DER of a private CA they install
+	MQTTPort int
+	CA       []byte
+	Now      func() time.Time
 
 	mu sync.Mutex
 	// changed is the time of the last preset change of a device: applied once the device synchronized after it
@@ -198,6 +202,12 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 	// the token is the secret: an agent set up before accepts a new setup with it only
 	s.Configure = fmt.Sprintf("content call --uri %s --method setup --arg %s --extra deviceId:s:%s --extra secret:s:%s --extra token:s:%s",
 		SetupURI, m.PublicURL, serial, m.Secret, m.Secret)
+	if m.MQTTPort > 0 {
+		s.Configure += fmt.Sprintf(" --extra mqttPort:i:%d", m.MQTTPort)
+	}
+	if len(m.CA) > 0 {
+		s.Configure += " --extra ca:s:" + base64.StdEncoding.EncodeToString(m.CA)
+	}
 	s.Release = m.ReleaseCommand()
 	s.ADB = []string{
 		"adb -s " + serial + " install -r mcloud-mdm-agent.apk",

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -103,7 +104,21 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second}
 	if cfg.HeadwindURL != "" {
 		mgr := &android.Manager{HW: headwind.New(cfg.HeadwindURL, cfg.HeadwindLogin, cfg.HeadwindPassword),
-			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret}
+			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret, MQTTPort: cfg.HeadwindMQTTPort}
+		if cfg.HeadwindTLSCAFile != "" {
+			raw, err := os.ReadFile(cfg.HeadwindTLSCAFile)
+			if err != nil {
+				return err
+			}
+			block, _ := pem.Decode(raw)
+			if block == nil || block.Type != "CERTIFICATE" {
+				return fmt.Errorf("HMDM_TLS_CA_FILE %s: no PEM certificate", cfg.HeadwindTLSCAFile)
+			}
+			mgr.CA = block.Bytes
+		}
+		if strings.HasPrefix(cfg.HeadwindPublicURL, "http://") {
+			log.Warn("HMDM_PUBLIC_URL is plain http: the API and MQTT of the agents are not encrypted, a lab only")
+		}
 		dev.Android, adm.Android = mgr, mgr
 		// Headwind MDM may start later: the problem is reported, Android works once it answers
 		if err := mgr.HW.Ping(); err != nil {

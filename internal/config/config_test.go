@@ -80,8 +80,17 @@ func TestHeadwind(t *testing.T) {
 	values["HMDM_SHARED_SECRET"] = "0123456789abcdef"
 	c, err = Load(env(values))
 	if err != nil || c.HeadwindURL != "http://mdm-hmdm:8080" || c.HeadwindPublicURL != "https://mcloud.example.com/hmdm" ||
-		c.HeadwindLogin != "admin" {
+		c.HeadwindLogin != "admin" || c.HeadwindMQTTPort != 31443 {
 		t.Errorf("valid: %+v %v", c, err)
+	}
+	values["HMDM_MQTT_PORT"] = "70000"
+	if _, err := Load(env(values)); err == nil || !strings.Contains(err.Error(), "HMDM_MQTT_PORT") {
+		t.Errorf("a bad MQTT port: %v", err)
+	}
+	values["HMDM_MQTT_PORT"] = ""
+	values["HMDM_PUBLIC_URL"] = "http://192.168.1.1:9080"
+	if c, err := Load(env(values)); err != nil || c.HeadwindMQTTPort != 31000 {
+		t.Errorf("plain MQTT by default for http: %v %v", c, err)
 	}
 	values["HMDM_SHARED_SECRET"] = "0123456789:abcdef"
 	if _, err := Load(env(values)); err == nil {

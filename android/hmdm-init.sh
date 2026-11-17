@@ -2,6 +2,8 @@
 # Sets the password of the admin of Headwind MDM to HMDM_PASSWORD and clears the reset Headwind MDM asks for at its
 # first start, so mcloud-mdm logs in (README.md#android). A one-shot service on the postgres image (psql, md5sum,
 # sha1sum), next to the postgres of Headwind MDM: PGHOST, PGUSER, PGPASSWORD, PGDATABASE, HMDM_LOGIN, HMDM_PASSWORD.
+# With HMDM_PUBLIC_URL, the URLs of the files of the applications (written with the internal http URL at the first
+# start) point to it.
 set -eu
 
 : "${HMDM_PASSWORD:?the password of the admin of Headwind MDM}"
@@ -29,3 +31,11 @@ update users set password = :'hash', passwordreset = false, passwordresettoken =
   where login = :'login' and (password <> :'hash' or passwordreset);
 SQL
 echo "hmdm-init: the password of ${login} is HMDM_PASSWORD"
+
+if test -n "${HMDM_PUBLIC_URL:-}"; then
+  psql -qtA -v ON_ERROR_STOP=1 -v base="${HMDM_PUBLIC_URL%/}" << 'SQL'
+update applicationversions set url = regexp_replace(url, '^https?://[^/]+', :'base')
+  where url ~ '^https?://[^/]+/files/' and url not like :'base' || '/%';
+SQL
+  echo "hmdm-init: the files of the applications are on ${HMDM_PUBLIC_URL%/}"
+fi

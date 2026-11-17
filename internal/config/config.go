@@ -42,6 +42,10 @@ type Config struct {
 	// HeadwindPublicURL is the URL of Headwind MDM the agents reach, HeadwindSecret its SHARED_SECRET
 	HeadwindPublicURL string
 	HeadwindSecret    string
+	// HeadwindMQTTPort is the MQTT port of the agents: TLS on the host of HeadwindPublicURL when it is https
+	HeadwindMQTTPort int
+	// HeadwindTLSCAFile is the PEM CA of a private certificate of HeadwindPublicURL: the agents install it (a lab)
+	HeadwindTLSCAFile string
 	// AgentAPK is the Android agent (make agent) served at /android/agent.apk
 	AgentAPK string
 }
@@ -73,6 +77,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		HeadwindPassword:  get("HMDM_PASSWORD", ""),
 		HeadwindPublicURL: strings.TrimRight(get("HMDM_PUBLIC_URL", ""), "/"),
 		HeadwindSecret:    get("HMDM_SHARED_SECRET", ""),
+		HeadwindTLSCAFile: get("HMDM_TLS_CA_FILE", ""),
 		AgentAPK:          get("MDM_ANDROID_AGENT_APK", "/android/mcloud-mdm-agent.apk"),
 	}
 	if u, err := url.Parse(c.PublicURL); c.PublicURL == "" || err != nil || u.Scheme != "https" || u.Host == "" {
@@ -104,6 +109,20 @@ func Load(getenv func(string) string) (*Config, error) {
 		if u, err := url.Parse(c.HeadwindPublicURL); c.HeadwindPublicURL == "" || err != nil ||
 			(u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			errs = append(errs, fmt.Errorf("HMDM_PUBLIC_URL %q: the http(s) URL of Headwind MDM the agents reach", c.HeadwindPublicURL))
+		}
+		defPort := "31000"
+		if strings.HasPrefix(c.HeadwindPublicURL, "https://") {
+			defPort = "31443"
+		}
+		port, err := strconv.Atoi(get("HMDM_MQTT_PORT", defPort))
+		if err != nil || port < 1 || port > 65535 {
+			errs = append(errs, fmt.Errorf("HMDM_MQTT_PORT %q: the MQTT port of the agents, 1-65535", getenv("HMDM_MQTT_PORT")))
+		}
+		c.HeadwindMQTTPort = port
+		if c.HeadwindTLSCAFile != "" {
+			if _, err := os.Stat(c.HeadwindTLSCAFile); err != nil {
+				errs = append(errs, fmt.Errorf("HMDM_TLS_CA_FILE: %w", err))
+			}
 		}
 		if len(c.HeadwindSecret) < 16 || strings.ContainsAny(c.HeadwindSecret, ": ") {
 			errs = append(errs, errors.New("HMDM_SHARED_SECRET: the SHARED_SECRET of Headwind MDM, 16+ characters without colons or spaces"))
