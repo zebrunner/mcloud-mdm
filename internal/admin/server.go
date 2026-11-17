@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zebrunner/mcloud-mdm/internal/android"
 	"github.com/zebrunner/mcloud-mdm/internal/config"
 	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
 	"github.com/zebrunner/mcloud-mdm/internal/profile"
@@ -30,6 +31,8 @@ type Server struct {
 	NanoHUB *nanohub.Client
 	State   *state.Store
 	Log     *slog.Logger
+	// Android is nil without Headwind MDM
+	Android *android.Manager
 	// AnswerTimeout bounds the wait for the report of a command of a ready profile
 	AnswerTimeout time.Duration
 	// RefreshDelay is the wait after a new enrollment before its DDM notify and ProfileList
@@ -49,6 +52,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/preset/remove", s.browser(s.presetRemove))
 	mux.HandleFunc("POST /api/pushcert", s.browser(s.pushCert))
 	mux.HandleFunc("POST /api/raw", s.browser(s.raw))
+	mux.HandleFunc("GET /api/android", s.androidView)
+	mux.HandleFunc("POST /api/android/enroll", s.browser(s.androidEnroll))
+	mux.HandleFunc("POST /api/android/preset", s.browser(s.androidPreset))
+	mux.HandleFunc("POST /api/android/command", s.browser(s.androidCommand))
+	mux.HandleFunc("POST /api/android/delete", s.browser(s.androidDelete))
 	mux.HandleFunc("POST /webhook", s.webhook)
 	return mux
 }

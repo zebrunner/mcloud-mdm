@@ -47,6 +47,9 @@
   .preset { border:1px solid var(--line); border-radius:6px; padding:10px; }
   .preset h3 { font-size:14px; margin:0 0 4px; }
   .preset input { width:150px; }
+  .wide { grid-column: 1 / span 3; }
+  .android { display:grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap:10px; }
+  .android .preset label { display:block; margin:3px 0; }
 </style>
 </head>
 <body>
@@ -132,6 +135,23 @@
       <div class="row">Certificate <input type="file" id="certFile" accept=".pem,.crt,.cer"> Private key <input type="file" id="keyFile" accept=".pem,.key"><button class="primary" id="certSend">Upload to NanoHUB</button></div>
       <pre id="certOut">-</pre>
     </div>
+  </section>
+</main>
+<main style="padding-top:0">
+  <section class="wide" id="androidSection">
+    <h2>Android (Headwind MDM)</h2>
+    <div class="muted" id="androidServer">loading...</div>
+    <div class="hint">The agent (android/agent, make agent) is the device owner, installed over adb: no factory reset, released by
+      "Release the device" or <code>adb shell dpm remove-active-admin com.hmdm.launcher/.AdminReceiver</code>. It keeps the system
+      launcher, never grants permissions to the apps and installs nothing by itself; it always forbids safe mode (no_safe_boot). Every device has its own configuration
+      mcloud-&lt;serial&gt; in Headwind MDM: its presets. A device with an account (Google) cannot get a device owner: remove the accounts first.</div>
+    <div class="row">
+      <input type="text" id="androidSerial" placeholder="adb serial">
+      <input type="text" id="androidName" placeholder="name (optional)">
+      <button class="primary" id="androidEnroll">Prepare the enrollment</button>
+    </div>
+    <pre id="androidSetup" style="display:none"></pre>
+    <div id="androidDevices" class="android"></div>
   </section>
 </main>
 <div id="toast"></div>
@@ -350,6 +370,65 @@ function buildPresets() {
   };
 }
 
+let android = null;
+function androidCard(d) {
+  const div = document.createElement("div"); div.className = "preset";
+  const h = document.createElement("h3"); h.textContent = (d.name || d.model || d.serial) + " ";
+  const owner = document.createElement("span"); owner.className = "tag " + (d.device_owner ? "on" : "off");
+  owner.textContent = d.device_owner ? "device owner" : "not managed"; h.appendChild(owner);
+  if (d.pending) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "waiting for sync"; h.appendChild(t); }
+  if (d.unmanaged) { const t = document.createElement("span"); t.className = "tag off"; t.textContent = "foreign configuration"; h.appendChild(t); }
+  const info = document.createElement("div"); info.className = "muted";
+  info.textContent = `${d.serial} - ${d.model || "?"}, Android ${d.os_version || "?"}, battery ${d.battery ?? "?"}%, agent ${d.agent_version || "?"}, last sync ${d.last_sync_at ? new Date(d.last_sync_at).toLocaleString() : "never"}`;
+  div.append(h, info);
+  for (const p of android.presets) {
+    const label = document.createElement("label"); label.title = p.hint;
+    const box = document.createElement("input"); box.type = "checkbox"; box.checked = !!(d.presets || {})[p.name];
+    box.onchange = async () => {
+      try { await call("api/android/preset", {serial: d.serial, name: p.name, on: box.checked}); toast(`${p.title}: ${box.checked ? "on" : "off"}, the agent applies it at its sync`); }
+      catch (e) { toast("error: " + e.message, 8000); box.checked = !box.checked; }
+      refreshAndroid();
+    };
+    label.append(box, " " + p.title);
+    div.appendChild(label);
+  }
+  const row = document.createElement("div"); row.className = "row";
+  const pkg = document.createElement("input"); pkg.type = "text"; pkg.placeholder = "package"; pkg.value = "com.android.settings";
+  const sel = document.createElement("select");
+  for (const c of android.commands) { const o = document.createElement("option"); o.value = c.name; o.textContent = c.title + (c.danger ? "  (!)" : ""); o.title = c.hint; sel.appendChild(o); }
+  const hint = document.createElement("div"); hint.className = "hint";
+  const show = () => { const c = android.commands.find(x => x.name === sel.value); hint.textContent = c.hint; pkg.style.display = c.package ? "" : "none"; };
+  sel.onchange = show;
+  const send = document.createElement("button"); send.className = "primary"; send.textContent = "Send";
+  send.onclick = async () => {
+    const c = android.commands.find(x => x.name === sel.value);
+    if (c.danger && !confirm(`${c.title}${c.package ? " " + pkg.value : ""} on ${d.serial}?`)) return;
+    try { await call("api/android/command", {serial: d.serial, name: c.name, package: pkg.value}); toast(`${c.title}: sent (MQTT)`); }
+    catch (e) { toast("error: " + e.message, 8000); }
+  };
+  const del = document.createElement("button"); del.textContent = "Delete";
+  del.title = "Removes the device and its configuration from Headwind MDM; release it first or the agent keeps the device owner without a server";
+  del.onclick = async () => {
+    if (!confirm(`Delete ${d.serial} from the server? Release it first: a deleted device keeps its device owner.`)) return;
+    try { await call("api/android/delete", {serial: d.serial}); toast("deleted"); } catch (e) { toast("error: " + e.message, 8000); }
+    refreshAndroid();
+  };
+  row.append(sel, pkg, send, del);
+  div.append(row, hint); show();
+  return div;
+}
+
+async function refreshAndroid() {
+  try { android = await call("api/android"); } catch (e) { $("androidServer").textContent = "error: " + e.message; return; }
+  if (!android.enabled) { $("androidServer").textContent = "off: HMDM_URL is not set"; $("androidDevices").innerHTML = ""; return; }
+  $("androidServer").textContent = `server ${android.server} - enrollment ${android.enroll_url}` + (android.agent_url ? ` - agent ${android.agent_url}` : " - no agent APK (MDM_ANDROID_AGENT_APK)") + (android.error ? ` - ERROR: ${android.error}` : "");
+  const focused = document.activeElement && $("androidDevices").contains(document.activeElement);
+  if (focused) return;
+  const box = $("androidDevices"); box.innerHTML = "";
+  if (!(android.devices || []).length) box.textContent = "no Android device yet";
+  for (const d of android.devices || []) box.appendChild(androidCard(d));
+}
+
 async function init() {
   catalog = await call("api/catalog");
   presets = await call("api/presets");
@@ -394,8 +473,18 @@ async function init() {
     try { const r = await call("api/pushcert", {pem: (await c.text()) + "\n" + (await k.text())}); $("certOut").textContent = `topic ${r.topic}, until ${r.not_after}`; refresh(); }
     catch (e) { $("certOut").textContent = "error: " + e.message; }
   };
+  $("androidEnroll").onclick = async () => {
+    try {
+      const r = await call("api/android/enroll", {serial: $("androidSerial").value.trim(), name: $("androidName").value.trim()});
+      $("androidSetup").style.display = "";
+      $("androidSetup").textContent = "# on the host of the device, with the agent APK (make agent):\n" + r.adb.join("\n");
+      refreshAndroid();
+    } catch (e) { toast("error: " + e.message, 8000); }
+  };
   await refresh();
   setInterval(refresh, 2000);
+  await refreshAndroid();
+  setInterval(refreshAndroid, 5000);
 }
 init();
 </script>

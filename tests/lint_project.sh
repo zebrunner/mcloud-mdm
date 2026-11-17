@@ -2,8 +2,8 @@
 # shellcheck disable=SC2034
 # The settings and the checks of the project for tests/lint.sh (CONVENTIONS.md): mcloud-mdm, a Go program.
 
-scripts=(tests/*.sh)
-dockerfiles=(Dockerfile)
+scripts=(tests/*.sh android/*.sh)
+dockerfiles=(Dockerfile android/agent/Dockerfile)
 tools=(go)
 # go_sources: the Go files of the repository
 go_sources() {

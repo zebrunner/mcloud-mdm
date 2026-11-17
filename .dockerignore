@@ -9,3 +9,4 @@ VERSION
 *.md
 .DS_Store
 **/.DS_Store
+android

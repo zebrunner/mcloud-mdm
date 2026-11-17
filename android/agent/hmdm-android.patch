@@ -1,0 +1,389 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index abcf02e..9d9baa4 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -55,10 +55,10 @@ android {
+         multiDexEnabled true
+
+         // Default URL of the web panel (scheme + host!)
+-        buildConfigField("String", "BASE_URL", "\"https://app.h-mdm.com\"")
++        buildConfigField("String", "BASE_URL", "\"https://mdm.invalid\"")
+         // URL of the secondary address of your web panel, called when the primary host is not available.
+         // Could be equal to the BASE_URL parameter
+-        buildConfigField("String", "SECONDARY_BASE_URL", "\"https://app.h-mdm.com\"")
++        buildConfigField("String", "SECONDARY_BASE_URL", "\"https://mdm.invalid\"")
+         // Relative path of the web panel on the server. Keep it empty if installed in the root
+         buildConfigField("String", "SERVER_PROJECT", "\"\"")
+         // This parameter manages how the device ID should be set up at first start
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 2aab588..8d98096 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -116,6 +116,7 @@
+     <uses-feature android:name="android.software.leanback" android:required="false" />
+
+     <application
++        android:testOnly="true"
+         android:icon="@mipmap/ic_launcher"
+         android:label="@string/white_app_name"
+         android:supportsRtl="true"
+@@ -230,6 +231,12 @@
+             </intent-filter>
+         </receiver>
+
++        <!-- MCloud: setup over adb, see SetupProvider -->
++        <provider
++            android:name=".mcloud.SetupProvider"
++            android:authorities="${applicationId}.mcloud"
++            android:exported="true" />
++
+         <provider
+             android:name="androidx.core.content.FileProvider"
+             android:authorities="${applicationId}.provider"
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+index d935f09..25f05fe 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+@@ -203,7 +203,10 @@ public class ConfigUpdater {
+     }
+
+     private void lockBackOnFailure() {
+-        Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++        // MCloud: no config yet on the first start without the server
++        if (settingsHelper.getConfig() != null) {
++            Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++        }
+     }
+
+     public void skipConfigLoad() {
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+index 8d9a16f..45682e5 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+@@ -59,7 +59,7 @@ public class MigrationHelper {
+                 String deviceId = settingsHelper.getDeviceId();
+                 String signature = "";
+                 try {
+-                    signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + deviceId);
++                    signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + deviceId);
+                 } catch (Exception e) {
+                 }
+
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Release.java b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
+new file mode 100644
+index 0000000..ff42942
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
+@@ -0,0 +1,39 @@
++package com.hmdm.launcher.mcloud;
++
++import android.app.admin.DevicePolicyManager;
++import android.content.Context;
++
++import com.hmdm.launcher.Const;
++import com.hmdm.launcher.util.RemoteLogger;
++import com.hmdm.launcher.util.Utils;
++
++/**
++ * MCloud: the "mcloudRelease" push. The agent clears the device owner by itself: no factory reset, no adb needed.
++ */
++public final class Release {
++
++    public static final String PUSH_TYPE = "mcloudRelease";
++
++    private Release() {
++    }
++
++    public static void run(Context context) {
++        if (!Utils.isDeviceOwner(context)) {
++            RemoteLogger.log(context, Const.LOG_WARN, "Release: not the device owner");
++            return;
++        }
++        RemoteLogger.log(context, Const.LOG_INFO, "Release: clearing the device owner");
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        try {
++            Utils.clearDefaultLauncher(context);
++            // Android 12 fails to remove the reset password token of a leaving device owner (it lists the users
++            // without the permission): the token goes first
++            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
++                dpm.clearResetPasswordToken(com.hmdm.launcher.util.LegacyUtils.getAdminComponentName(context));
++            }
++            dpm.clearDeviceOwnerApp(context.getPackageName());
++        } catch (Exception e) {
++            RemoteLogger.log(context, Const.LOG_ERROR, "Release failed: " + android.util.Log.getStackTraceString(e));
++        }
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
+new file mode 100644
+index 0000000..5daf40c
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
+@@ -0,0 +1,45 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import com.hmdm.launcher.BuildConfig;
++
++/**
++ * MCloud: the shared secret of the server (MQTT password, request signatures), set over adb by SetupProvider instead of
++ * being built into the APK: one APK for every farm.
++ */
++public final class Secret {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY = "secret";
++
++    private static volatile String value = BuildConfig.REQUEST_SIGNATURE;
++
++    private Secret() {
++    }
++
++    public static String value() {
++        return value;
++    }
++
++    public static boolean isSet(Context context) {
++        return prefs(context).getString(KEY, null) != null;
++    }
++
++    static void load(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved != null && !saved.isEmpty()) {
++            value = saved;
++        }
++    }
++
++    static void save(Context context, String secret) {
++        prefs(context).edit().putString(KEY, secret).commit();
++        value = secret;
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
+new file mode 100644
+index 0000000..93adfda
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
+@@ -0,0 +1,96 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.ContentProvider;
++import android.content.ContentValues;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Binder;
++import android.os.Bundle;
++
++import com.hmdm.launcher.helper.SettingsHelper;
++import com.hmdm.launcher.util.Utils;
++
++/**
++ * MCloud: configures the agent over adb without the screen.
++ *
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup \
++ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SHARED_SECRET
++ * (the url goes in --arg: "content" refuses colons in the values of --extra)
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method status
++ *
++ * Only adb shell and root may call it: an app on the device must not be able to move the device to another server.
++ */
++public class SetupProvider extends ContentProvider {
++
++    private static final int SHELL_UID = 2000;
++    private static final int ROOT_UID = 0;
++
++    @Override
++    public boolean onCreate() {
++        // providers are created before the other components of the app: the secret is ready for all of them
++        Secret.load(getContext());
++        return true;
++    }
++
++    @Override
++    public Bundle call(String method, String arg, Bundle extras) {
++        int uid = Binder.getCallingUid();
++        if (uid != SHELL_UID && uid != ROOT_UID) {
++            throw new SecurityException("only adb shell may configure the agent");
++        }
++        SettingsHelper settings = SettingsHelper.getInstance(getContext());
++        if ("setup".equals(method)) {
++            String baseUrl = arg;
++            String deviceId = extras != null ? extras.getString("deviceId") : null;
++            if (baseUrl == null || !(baseUrl.startsWith("https://") || baseUrl.startsWith("http://"))) {
++                throw new IllegalArgumentException("baseUrl (http or https) is required");
++            }
++            if (deviceId == null || deviceId.trim().isEmpty()) {
++                throw new IllegalArgumentException("deviceId is required");
++            }
++            settings.setBaseUrl(baseUrl);
++            settings.setSecondaryBaseUrl(baseUrl);
++            settings.setServerProject(extras.getString("serverProject", ""));
++            settings.setDeviceId(deviceId.trim());
++            String secret = extras.getString("secret");
++            if (secret != null && !secret.isEmpty()) {
++                Secret.save(getContext(), secret);
++            }
++        } else if (!"status".equals(method)) {
++            throw new IllegalArgumentException("unknown method: " + method);
++        }
++        Bundle result = new Bundle();
++        result.putBoolean("deviceOwner", Utils.isDeviceOwner(getContext()));
++        result.putBoolean("configured", settings.isBaseUrlSet() && settings.getDeviceId() != null && !settings.getDeviceId().isEmpty());
++        result.putString("baseUrl", settings.isBaseUrlSet() ? settings.getBaseUrl() : null);
++        result.putString("deviceId", settings.getDeviceId());
++        result.putBoolean("configLoaded", settings.getConfig() != null);
++        result.putBoolean("secretSet", Secret.isSet(getContext()));
++        return result;
++    }
++
++    @Override
++    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
++        return null;
++    }
++
++    @Override
++    public String getType(Uri uri) {
++        return null;
++    }
++
++    @Override
++    public Uri insert(Uri uri, ContentValues values) {
++        return null;
++    }
++
++    @Override
++    public int delete(Uri uri, String selection, String[] selectionArgs) {
++        return 0;
++    }
++
++    @Override
++    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
++        return 0;
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java b/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
+index 3c5cf8c..2a1acde 100644
+--- a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
++++ b/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
+@@ -115,7 +115,7 @@ public class PushLongPollingService extends Service {
+         String path = settingsHelper.getServerProject() + "/rest/notification/polling/" + encodedDeviceId;
+         String signature = null;
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + path);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + path);
+         } catch (Exception e) {
+         }
+
+diff --git a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+index f778868..654a664 100644
+--- a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
++++ b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+@@ -94,7 +94,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+         String deviceId = settingsHelper.getDeviceId();
+         String signature = "";
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + deviceId);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + deviceId);
+         } catch (Exception e) {
+         }
+
+@@ -249,7 +249,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+                 return null;
+             }
+             String serverData = serverResponse.substring(pos + dataMarker.length(), serverResponse.length() - 1);
+-            String calculatedSignature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + serverData.replaceAll("\\s", ""));
++            String calculatedSignature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + serverData.replaceAll("\\s", ""));
+             if (!calculatedSignature.equalsIgnoreCase(serverSignature)) {
+                 errorText = "Server signature " + serverSignature + " doesn't match calculated signature " + calculatedSignature + ", dropping response";
+                 Log.e(Const.LOG_TAG, errorText);
+@@ -355,7 +355,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+                 return null;
+             }
+             String serverData = serverResponse.substring(pos + dataMarker.length(), serverResponse.length() - 1);
+-            String calculatedSignature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + serverData.replaceAll("\\s", ""));
++            String calculatedSignature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + serverData.replaceAll("\\s", ""));
+             if (!calculatedSignature.equalsIgnoreCase(serverSignature)) {
+                 errorText = "Server signature " + serverSignature + " doesn't match calculated signature " + calculatedSignature + ", dropping response";
+                 Log.e(Const.LOG_TAG, errorText);
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+index 3cf4d12..b3153fd 100644
+--- a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
++++ b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+@@ -2507,15 +2507,8 @@ public class MainActivity
+         }
+
+         if (Utils.isDeviceOwner(this)) {
+-            if (settingsHelper.getConfig() != null && (ServerConfig.APP_PERMISSIONS_ASK_ALL.equals(settingsHelper.getConfig().getAppPermissions()) ||
+-                    ServerConfig.APP_PERMISSIONS_ASK_LOCATION.equals(settingsHelper.getConfig().getAppPermissions()))) {
+-                // Even in device owner mode, if "Ask for location" is requested by the admin,
+-                // let's ask permissions (so do nothing here, fall through)
+-            } else {
+-                // Do not request permissions if we're the device owner
+-                // They are added automatically
+-                return true;
+-            }
++            // MCloud: no permission dialogs of the agent on a farm device, even with "ask" for the other apps
++            return true;
+         }
+
+         if (preferences.getInt(Const.PREFERENCES_DISABLE_LOCATION, Const.PREFERENCES_OFF) == Const.PREFERENCES_ON) {
+diff --git a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
+index fd9a389..0cf8eec 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
++++ b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
+@@ -420,7 +420,7 @@ public class InstallUtils {
+         String filepath = strUrl.substring(index);
+
+         try {
+-            return CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + filepath);
++            return CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + filepath);
+         } catch (Exception e) {
+         }
+         return null;
+diff --git a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+index a3f58c1..23ad09d 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
++++ b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+@@ -111,7 +111,7 @@ public class PushNotificationMqttWrapper {
+             connectOptions.setKeepAliveInterval(keepaliveTime);
+         }
+         connectOptions.setUserName("hmdm");
+-        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + BuildConfig.REQUEST_SIGNATURE).toCharArray());
++        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + com.hmdm.launcher.mcloud.Secret.value()).toCharArray());
+         String serverUri = "tcp://" + host + ":" + port;
+
+         if (client != null) {
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+index a075f23..714db07 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+@@ -136,6 +136,10 @@ public class PushNotificationProcessor {
+             // Clear application data
+             executor.execute(() -> clearAppData(context, message.getPayloadJSON()));
+             return;
++        } else if (message.getMessageType().equals(com.hmdm.launcher.mcloud.Release.PUSH_TYPE)) {
++            // MCloud: give up the device owner: the restrictions go away, the agent becomes a regular app
++            com.hmdm.launcher.mcloud.Release.run(context);
++            return;
+         }
+
+         // Send broadcast to all plugins
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+index 13b1da3..3ac11e8 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+@@ -121,7 +121,7 @@ public class PushNotificationWorker extends Worker {
+         String path = settingsHelper.getServerProject() + "/rest/notifications/device/" + encodedDeviceId;
+         String signature = null;
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + path);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + path);
+         } catch (Exception e) {
+         }
+

@@ -35,6 +35,15 @@ type Config struct {
 	ChallengeTTL time.Duration
 	CertDays     int
 	LogLevel     slog.Level
+	// HeadwindURL is the API of Headwind MDM, the server of the Android agents; empty: no Android
+	HeadwindURL      string
+	HeadwindLogin    string
+	HeadwindPassword string
+	// HeadwindPublicURL is the URL of Headwind MDM the agents reach, HeadwindSecret its SHARED_SECRET
+	HeadwindPublicURL string
+	HeadwindSecret    string
+	// AgentAPK is the Android agent (make agent) served at /android/agent.apk
+	AgentAPK string
 }
 
 // Load reads the environment; every invalid variable is reported in the returned error.
@@ -58,6 +67,13 @@ func Load(getenv func(string) string) (*Config, error) {
 		ProfileID:    get("MDM_PROFILE_ID", "com.zebrunner.mcloud.mdm"),
 		OrgName:      get("MDM_ORG_NAME", "Zebrunner MCloud"),
 		TLSCAFile:    get("MDM_TLS_CA_FILE", ""),
+
+		HeadwindURL:       strings.TrimRight(get("HMDM_URL", ""), "/"),
+		HeadwindLogin:     get("HMDM_LOGIN", "admin"),
+		HeadwindPassword:  get("HMDM_PASSWORD", ""),
+		HeadwindPublicURL: strings.TrimRight(get("HMDM_PUBLIC_URL", ""), "/"),
+		HeadwindSecret:    get("HMDM_SHARED_SECRET", ""),
+		AgentAPK:          get("MDM_ANDROID_AGENT_APK", "/android/mcloud-mdm-agent.apk"),
 	}
 	if u, err := url.Parse(c.PublicURL); c.PublicURL == "" || err != nil || u.Scheme != "https" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("MDM_PUBLIC_URL %q: the https URL the devices reach, e.g. https://mcloud.example.com", c.PublicURL))
@@ -76,6 +92,21 @@ func Load(getenv func(string) string) (*Config, error) {
 	if c.TLSCAFile != "" {
 		if _, err := os.Stat(c.TLSCAFile); err != nil {
 			errs = append(errs, fmt.Errorf("MDM_TLS_CA_FILE: %w", err))
+		}
+	}
+	if c.HeadwindURL != "" {
+		if u, err := url.Parse(c.HeadwindURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("HMDM_URL %q: the http(s) URL of Headwind MDM, e.g. http://mdm-hmdm:8080", c.HeadwindURL))
+		}
+		if c.HeadwindPassword == "" {
+			errs = append(errs, errors.New("HMDM_PASSWORD is empty: the password of HMDM_LOGIN in Headwind MDM"))
+		}
+		if u, err := url.Parse(c.HeadwindPublicURL); c.HeadwindPublicURL == "" || err != nil ||
+			(u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("HMDM_PUBLIC_URL %q: the http(s) URL of Headwind MDM the agents reach", c.HeadwindPublicURL))
+		}
+		if len(c.HeadwindSecret) < 16 || strings.ContainsAny(c.HeadwindSecret, ": ") {
+			errs = append(errs, errors.New("HMDM_SHARED_SECRET: the SHARED_SECRET of Headwind MDM, 16+ characters without colons or spaces"))
 		}
 	}
 	ttl, err := time.ParseDuration(get("MDM_CHALLENGE_TTL", "10m"))

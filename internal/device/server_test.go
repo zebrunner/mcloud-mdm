@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -105,5 +106,26 @@ func TestHealth(t *testing.T) {
 	}
 	if code, _ := get(t, srv.URL+"/api/state", ""); code != http.StatusNotFound {
 		t.Errorf("the admin API on the device listener: %d", code)
+	}
+}
+
+func TestAndroidEndpoints(t *testing.T) {
+	s, srv := server(t)
+	defer srv.Close()
+	s.Config.AgentAPK = t.TempDir() + "/agent.apk"
+	if code, _ := get(t, srv.URL+"/android/enroll?serial=SER001", ""); code != http.StatusUnauthorized {
+		t.Errorf("no token: %d", code)
+	}
+	if code, _ := get(t, srv.URL+"/android/enroll?serial=SER001", "0123456789abcdef"); code != http.StatusNotFound {
+		t.Errorf("no Headwind MDM: %d", code)
+	}
+	if code, _ := get(t, srv.URL+"/android/agent.apk", ""); code != http.StatusNotFound {
+		t.Errorf("no APK: %d", code)
+	}
+	if err := os.WriteFile(s.Config.AgentAPK, []byte("PK apk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := get(t, srv.URL+"/android/agent.apk", ""); code != http.StatusOK || string(body) != "PK apk" {
+		t.Errorf("APK: %d %q", code, body)
 	}
 }

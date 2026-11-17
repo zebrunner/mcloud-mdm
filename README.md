@@ -13,6 +13,7 @@ The MDM service of [MCloud](https://github.com/zebrunner/mcloud) next to [NanoHU
 - The device listener (`:8080`) is published by the proxy of MCloud: `/scep`, `/mdm/enroll` and `/healthz`.
 - The admin listener (`:8081`) is never published without the authentication of MCloud: it sends any MDM command to any device. NanoHUB posts its webhook there.
 - An enrollment needs the device on USB once (supervision, then the profile installed with no prompt by the agent: go-ios and the supervision identity); every command afterwards goes over the network and APNs. Apple Business (ADE) is the other way in: the enrollment profile URL is the same.
+- Android: [Headwind MDM](https://github.com/h-mdm/hmdm-server) is the server and the agent of `android/agent` the device owner, set over adb with no factory reset; mcloud-mdm drives Headwind MDM by its API ([Android](#android)).
 
 ## Image contents
 
@@ -80,6 +81,12 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `MDM_CHALLENGE_TTL` | `10m` | the life of the one-time SCEP challenge of an enrollment profile |
 | `MDM_CERT_DAYS` | `365` | the validity of the device identities; the devices renew them with the same identity (RenewalReq) |
 | `LOGGER_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR` |
+| `HMDM_URL` | | the API of Headwind MDM, e.g. `http://mdm-hmdm:8080`; empty: no Android |
+| `HMDM_LOGIN` | `admin` | the user of Headwind MDM |
+| `HMDM_PASSWORD` | | its password (`android/hmdm-init.sh` sets it); required with `HMDM_URL` |
+| `HMDM_PUBLIC_URL` | | the http(s) URL of Headwind MDM the agents reach; required with `HMDM_URL` |
+| `HMDM_SHARED_SECRET` | | the `SHARED_SECRET` of Headwind MDM (the MQTT password of the agents), 16+ characters without colons or spaces; required with `HMDM_URL` |
+| `MDM_ANDROID_AGENT_APK` | `/android/mcloud-mdm-agent.apk` | the agent (`make agent`) served at `/android/agent.apk` |
 
 ## Enrollment
 
@@ -94,6 +101,68 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 - The removal of the MDM profile removes every profile MDM installed; the DDM declarations come back with the next enrollment (mcloud-mdm notifies DDM after it).
 - Developer Mode, the supervision and the recovery of a device that lost MDM need USB: no MDM command or key exists for them.
 
+## Android
+
+Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of the Android agents: their configurations, the MQTT push (port 31000) and the device info. Its admin asks for a new password at the first start: `android/hmdm-init.sh`, a one-shot service on the `postgres` image, sets `HMDM_PASSWORD` at every start.
+
+```yaml
+  hmdm:
+    image: headwindmdm/hmdm:0.1.9
+    environment:
+      SQL_HOST: hmdm-postgres
+      SQL_USER: hmdm
+      SQL_BASE: hmdm
+      SQL_PASS: ${HMDM_SQL_PASS}
+      PROTOCOL: https
+      BASE_DOMAIN: hmdm.mcloud.example.com
+      SHARED_SECRET: ${HMDM_SHARED_SECRET}
+      HMDM_URL: https://h-mdm.com/files/hmdm-5.41.1-os.war
+      CLIENT_VERSION: "6.40"
+    ports:
+      - "31000:31000"
+  hmdm-init:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/hmdm-init.sh"]
+    environment:
+      PGHOST: hmdm-postgres
+      PGUSER: hmdm
+      PGPASSWORD: ${HMDM_SQL_PASS}
+      PGDATABASE: hmdm
+      HMDM_PASSWORD: ${HMDM_PASSWORD}
+    volumes:
+      - ./android/hmdm-init.sh:/hmdm-init.sh:ro
+    restart: "no"
+```
+
+The agent is the launcher of Headwind MDM ([hmdm-android](https://github.com/h-mdm/hmdm-android), Apache-2.0) with `android/agent/hmdm-android.patch`:
+
+- `android:testOnly`: `adb shell dpm remove-active-admin com.hmdm.launcher/.AdminReceiver` removes the device owner, no factory reset (installed by `adb install -t`).
+- the setup over adb, without the screen: `content call --uri content://com.hmdm.launcher.mcloud --method setup --arg <server> --extra deviceId:s:<serial> --extra secret:s:<secret>`; only the uid of adb shell (or root) may call it.
+- the shared secret of the server comes with the setup: one APK for every farm.
+- the push `mcloudRelease`: the agent removes its device owner (the reset password token first, Android 12 fails otherwise).
+- no permission dialog of the agent; a crash on the first start without a configuration fixed.
+
+`make agent AGENT_KEYSTORE=<keystore> AGENT_KEYSTORE_PASSWORD=<password>` builds and signs `bin/mcloud-mdm-agent.apk` in Docker (linux/amd64). Keep the key: Android updates a device owner app signed with the same key only.
+
+Every device gets its own configuration `mcloud-<serial>` (a copy of `Common - Minimal`) safe for a farm: the system launcher stays (`runDefaultLauncher`), the agent never grants the permissions of the apps (`ASKALL`) and installs no app but itself, no kiosk. The enrollment on the device host (`android/enroll.sh`, the device on USB, no Google account on it: Android refuses a device owner then):
+
+```bash
+MDM_URL=https://mcloud.example.com MDM_ENROLL_TOKEN=... android/enroll.sh <serial> [name]
+```
+
+It downloads `/android/agent.apk`, takes the setup of `GET /android/enroll?serial=<serial>&format=shell` (the enrollment token; the JSON without `format` has the adb commands), installs the agent, sets the device owner, sets the agent up and starts it.
+
+| Preset | Android | Checked on a Pixel 3 XL, Android 12 |
+| --- | --- | --- |
+| `swupdate-postpone` | `SystemUpdatePolicy` postpone (30 days) | |
+| `bluetooth-off` | Bluetooth off, `no_bluetooth` | restriction active, Bluetooth off; removed: restriction gone |
+| `erase-off` | `no_factory_reset` | restriction active |
+| `wifi-locked` | `no_config_wifi` | |
+| `accounts-off` | `no_modify_accounts` | |
+| `users-off` | `no_add_user` | |
+
+The commands are push messages: sync, reboot, run an app, clear the data of an app, uninstall an app and release. The agent always sets `no_safe_boot`. `no_debugging_features`, `no_install_apps` and `no_uninstall_apps` are never offered: they break adb.
+
 ## Admin UI
 
 - The devices of the webhook (`Authenticate`, `TokenUpdate`, `CheckOut`), with the unlock token of `ClearPasscode` kept and never shown.
@@ -102,6 +171,7 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 - The ready profiles, installed by `InstallProfile` and removed by `RemoveProfile`, their "installed" marks from `ProfileList`.
 - The console of the API of NanoHUB with the DDM declarations (configurations, activations, sets, status) and NanoCMD.
 - The upload of the APNs push certificate and its key.
+- Android: the devices of Headwind MDM with their presets (applied at the next sync of the agent), the push commands, the enrollment commands of a serial.
 
 ## Ready profiles
 
@@ -130,8 +200,9 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 | Target | What it checks |
 | --- | --- |
 | `make lint` | `tests/lint.sh`: the shared linters, gofmt, go vet, go mod tidy |
-| `make test` | `go test -race ./...`: SCEP (one-time challenges, renewal), the profiles, the state, the admin API and the webhook |
+| `make test` | `go test -race ./...`: SCEP (one-time challenges, renewal), the profiles, the state, the admin API, the webhook and Android (a fake Headwind MDM) |
 | `make docker` | `tests/image_test.sh`: the image, its configuration, exit codes, startup, both listeners and the CA kept in the volume |
+| `make agent` | builds the Android agent (not part of `make check`) |
 | `make check` | all of them |
 
 The conventions of the repository are in [CONVENTIONS.md](CONVENTIONS.md).
