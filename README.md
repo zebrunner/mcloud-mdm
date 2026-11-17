@@ -84,7 +84,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `HMDM_URL` | | the API of Headwind MDM, e.g. `http://mdm-hmdm:8080`; empty: no Android |
 | `HMDM_LOGIN` | `admin` | the user of Headwind MDM |
 | `HMDM_PASSWORD` | | its password (`android/hmdm-init.sh` sets it); required with `HMDM_URL` |
-| `HMDM_PUBLIC_URL` | | the URL of Headwind MDM the agents reach, https (plain http: a lab only, logged); required with `HMDM_URL` |
+| `HMDM_PUBLIC_URL` | `<MDM_PUBLIC_URL>/hmdm` | the URL of Headwind MDM the agents reach (one path segment at most: the agent sends it as its server project), https (plain http: a lab only, logged) |
 | `HMDM_SHARED_SECRET` | | the `SHARED_SECRET` of Headwind MDM (the MQTT password of the agents), 16+ characters without colons or spaces; required with `HMDM_URL` |
 | `HMDM_MQTT_PORT` | `31443` for an https `HMDM_PUBLIC_URL`, `31000` otherwise | the MQTT port of the agents on the host of `HMDM_PUBLIC_URL` (TLS when it is https) |
 | `HMDM_TLS_CA_FILE` | | the PEM CA of a private certificate of `HMDM_PUBLIC_URL`: the setup installs it on the devices (a lab) |
@@ -105,7 +105,7 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 
 ## Android
 
-Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of the Android agents: their configurations, the MQTT push and the device info. It serves plain http and MQTT inside; the proxy terminates TLS (`proxy.conf`): https on a host of its own (`HMDM_PUBLIC_URL`) and MQTT over TLS (`HMDM_MQTT_PORT`, 31443 -> 31000).
+Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of the Android agents: their configurations, the MQTT push and the device info. It serves plain http and MQTT inside; the proxy terminates TLS (`proxy.conf`): https under `/hmdm` of the domain of the farm (`HMDM_PUBLIC_URL`, the proxy strips the prefix) and MQTT over TLS on the same host (`HMDM_MQTT_PORT`, 31443 -> 31000). No DNS name or certificate of its own.
 
 - `android/hmdm-entrypoint.sh` (the entrypoint of `hmdm`) writes the context of the web application at every start: `base.url` is `HMDM_PUBLIC_URL`, `secure.enrollment=1` (the agents sign their requests with `SHARED_SECRET`: nobody else enrolls or reads a configuration, checked: an unsigned request is refused).
 - `android/hmdm-init.sh` (a one-shot service on the `postgres` image) sets `HMDM_PASSWORD` (Headwind MDM asks for a new password at its first start) and points the URLs of the files of the applications to `HMDM_PUBLIC_URL`.
@@ -121,8 +121,8 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
       SQL_BASE: hmdm
       SQL_PASS: ${HMDM_SQL_PASS}
       PROTOCOL: http
-      BASE_DOMAIN: demo-mdm.zebrunner.farm
-      HMDM_PUBLIC_URL: https://demo-mdm.zebrunner.farm
+      BASE_DOMAIN: demo.zebrunner.farm
+      HMDM_PUBLIC_URL: https://demo.zebrunner.farm/hmdm
       SHARED_SECRET: ${HMDM_SHARED_SECRET}
       HMDM_URL: https://h-mdm.com/files/hmdm-5.41.1-os.war
       CLIENT_VERSION: "6.40"
@@ -137,7 +137,7 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
       PGPASSWORD: ${HMDM_SQL_PASS}
       PGDATABASE: hmdm
       HMDM_PASSWORD: ${HMDM_PASSWORD}
-      HMDM_PUBLIC_URL: https://demo-mdm.zebrunner.farm
+      HMDM_PUBLIC_URL: https://demo.zebrunner.farm/hmdm
     volumes:
       - ./android/hmdm-init.sh:/hmdm-init.sh:ro
     restart: "no"
@@ -202,14 +202,48 @@ A stack per farm next to its MCloud (not one for all the farms: the farms of dif
 | --- | --- | --- |
 | containers | NanoHUB + MySQL 8.4 | Headwind MDM (amd64, Tomcat) + PostgreSQL + `hmdm-init` |
 | shared | mcloud-mdm (SCEP, the enrollment, the admin UI) | mcloud-mdm (the enrollment, the agent APK, the admin UI) |
-| the proxy of MCloud publishes | `/mdm`, `/checkin` (NanoHUB), `/scep`, `/mdm/enroll` (mcloud-mdm) | `/android/enroll`, `/android/release`, `/android/agent.apk` (mcloud-mdm); Headwind MDM on a host of its own, e.g. `demo-mdm.zebrunner.farm`: its agent paths and MQTT over TLS 31443 |
-| from the devices | https to the domain of the farm | https to `HMDM_PUBLIC_URL`, TLS to 31443 |
+| the proxy of MCloud publishes | `/mdm`, `/checkin` (NanoHUB), `/scep`, `/mdm/enroll` (mcloud-mdm) | `/android/enroll`, `/android/release`, `/android/agent.apk` (mcloud-mdm), `/hmdm/` (the agent paths of Headwind MDM), MQTT over TLS 31443 |
+| from the devices | https to the domain of the farm | https to the domain of the farm, TLS to its port 31443 |
 | outbound | APNs: `api.push.apple.com` 443 | none (no Google services) |
 | secrets | the APNs push certificate, the supervision identity, `MDM_ENROLL_TOKEN` | the signing key of the agent, `HMDM_SHARED_SECRET` (the token and the MQTT password of the agents), `HMDM_PASSWORD` |
 | on the device host | go-ios: supervision, the profile, `ios pair`, Developer Mode | adb: `android/enroll.sh`, `android/release.sh` |
 | the device | supervised (`ios prepare`, it erases) once | no account, a single user; no factory reset |
 
-`proxy.conf` is the MDM part of the proxy of a farm (nginx): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its device hosts leave it by them), everything else of Headwind MDM, the API of NanoHUB and the admin UI of mcloud-mdm (`:8081`) stay inside; the admin UI only behind the authentication (LDAP) of MCloud.
+`proxy.conf` is the MDM part of stf-proxy ([MCloud and mcloud-agent](#mcloud-and-mcloud-agent)): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its nodes leave it by them); the API of NanoHUB, the device listener of mcloud-mdm and the web panel of Headwind MDM stay inside; the admin UI is `/mcloud/mdm/` for the admins of STF (LDAP).
+
+## MCloud and mcloud-agent
+
+Everything goes through the domain and the proxy of the farm: no DNS name, certificate or secret of its own for the nodes.
+
+MCloud (zebrunner/mcloud):
+
+- the compose profile `mdm` (as `adb-relay`): `mdm`, `mdm-nanohub`, `mdm-mysql`, `hmdm`, `hmdm-postgres`, `hmdm-init`, switched on by `MDM_ENABLED=true` of `.env`; the image tags in `TAG_*`;
+- `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`; `MDM_PUBLIC_URL` is `STF_URL`;
+- stf-proxy: the locations of `proxy.conf` (the addresses of the site and `MDM_ENROLL_TOKEN` rendered by the setup), its stream server on 31443 with the certificate of stf-proxy (`configuration/stf-proxy/ssl`), port 31443 published; a farm whose TLS ends before stf-proxy (a load balancer) terminates 31443 there too;
+- the admin UI `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF); `Host: $http_host` (the UI compares it with the Origin of its POSTs).
+
+mcloud-agent (zebrunner/mcloud-agent): `zebrunner-farm mdm <enroll|release|status> <udid>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. The commands run in the connector of the device (`docker exec device-<name>-<udid>-connector`):
+
+- Android (adb): `GET /android/agent.apk` into the connector, `GET /android/enroll?serial=<udid>&name=<name>&format=shell` (the `adb shell` command of the setup), `adb install -r`, `dpm set-device-owner com.hmdm.launcher/.AdminReceiver`, the setup, `am start`; the release: `GET /android/release` (its `adb shell` command). `android/enroll.sh` and `android/release.sh` are the reference.
+- iOS (go-ios, `/var/lib/lockdown` of the connector): `GET /mdm/enroll?udid=<udid>` (a profile with a one-time challenge), `ios profile add --p12file=<supervision identity>`; `ios pair --p12file` after a lost pairing; `ios devmode enable`.
+- later: the udev and systemd hook of a connected device enrolls a device that is not enrolled.
+
+## Deployment of a farm
+
+Once for all the farms: the image of mcloud-mdm, the signing key of the agent and the agent APK (`make agent`), the APNs push certificate (renewed once a year with the same Apple ID).
+
+Per farm (a test farm first):
+
+1. The public addresses of the site: `curl ifconfig.me` from a node and from a device on the Wi-Fi of the farm. A device in the network of the server of MCloud may reach it by its private address: add that network too, and check the NAT loopback to the public address.
+2. Port 31443/tcp of the server of MCloud open for the addresses of the site (a firewall, a security group of AWS); 443 is open already.
+3. `MDM_ENABLED=true`, the addresses of the site, `./zebrunner.sh setup` (it generates `mdm.env`); keep `mdm.env` in the store of the secrets too: without `HMDM_SHARED_SECRET` and the server the device owner goes with a factory reset only.
+4. `./zebrunner.sh start`; the checks: from another address `/mdm`, `/hmdm/...` and 31443 refuse; from the site `/android/agent.apk` answers, `openssl s_client -connect <farm>:31443` verifies; `/hmdm/` (the web panel) answers 404; `/mcloud/mdm/` asks for the sign-in of STF.
+5. The admin UI, iOS: the push certificate.
+6. The supervision identity of the farm on its nodes.
+7. Android: the accounts (Google) off the devices, `zebrunner-farm mdm enroll <udid>`; the admin UI shows the device owner and a fresh sync.
+8. iOS: the supervision erases the device (a window agreed with the users), then `zebrunner-farm mdm enroll <udid>`.
+9. The presets (the delay of the updates, no factory reset, ...).
+10. The backups: the volumes of MySQL, PostgreSQL and `/data` of mcloud-mdm (its SCEP CA: without it every iOS device enrolls again).
 
 ## Admin UI
 

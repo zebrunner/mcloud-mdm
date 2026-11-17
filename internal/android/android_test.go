@@ -150,9 +150,10 @@ func TestEnrollCreatesFarmConfiguration(t *testing.T) {
 	if !strings.Contains(s.Configure, "--arg https://hmdm.example.com --extra deviceId:s:96JY1BL9Z --extra secret:s:0123456789abcdef --extra token:s:0123456789abcdef") {
 		t.Errorf("setup command: %s", s.Configure)
 	}
-	m.MQTTPort, m.CA = 31443, []byte{1, 2, 3}
-	if s2, _ := m.Enroll("96JY1BL9Z", "", ""); !strings.HasSuffix(s2.Configure, " --extra mqttPort:i:31443 --extra ca:s:AQID") {
-		t.Errorf("TLS setup: %s", s2.Configure)
+	m.MQTTPort, m.CA, m.PublicURL = 31443, []byte{1, 2, 3}, "https://demo.example.com/hmdm"
+	if s2, _ := m.Enroll("96JY1BL9Z", "", ""); !strings.Contains(s2.Configure, "--arg https://demo.example.com --extra") ||
+		!strings.HasSuffix(s2.Configure, " --extra serverProject:s:hmdm --extra mqttPort:i:31443 --extra ca:s:AQID") {
+		t.Errorf("TLS setup under a path: %s", s2.Configure)
 	}
 	if s.Release != "content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:0123456789abcdef" {
 		t.Errorf("release command: %s", s.Release)

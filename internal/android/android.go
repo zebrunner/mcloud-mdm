@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -199,9 +200,19 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 		return nil, err
 	}
 	s := &Setup{Serial: serial, BaseURL: m.PublicURL, Secret: m.Secret, AgentURL: agentURL}
+	// the agent takes the host and the path apart: --arg <scheme://host>, serverProject <path>
+	base, project := m.PublicURL, ""
+	if u, err := url.Parse(m.PublicURL); err == nil && strings.Trim(u.Path, "/") != "" {
+		project = strings.Trim(u.Path, "/")
+		u.Path = ""
+		base = u.String()
+	}
 	// the token is the secret: an agent set up before accepts a new setup with it only
 	s.Configure = fmt.Sprintf("content call --uri %s --method setup --arg %s --extra deviceId:s:%s --extra secret:s:%s --extra token:s:%s",
-		SetupURI, m.PublicURL, serial, m.Secret, m.Secret)
+		SetupURI, base, serial, m.Secret, m.Secret)
+	if project != "" {
+		s.Configure += " --extra serverProject:s:" + project
+	}
 	if m.MQTTPort > 0 {
 		s.Configure += fmt.Sprintf(" --extra mqttPort:i:%d", m.MQTTPort)
 	}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,8 @@ type Config struct {
 	HeadwindURL      string
 	HeadwindLogin    string
 	HeadwindPassword string
-	// HeadwindPublicURL is the URL of Headwind MDM the agents reach, HeadwindSecret its SHARED_SECRET
+	// HeadwindPublicURL is the URL of Headwind MDM the agents reach, <PublicURL>/hmdm by default (the proxy of the
+	// farm publishes it under a path of its domain: no DNS name or certificate of its own), HeadwindSecret its SHARED_SECRET
 	HeadwindPublicURL string
 	HeadwindSecret    string
 	// HeadwindMQTTPort is the MQTT port of the agents: TLS on the host of HeadwindPublicURL when it is https
@@ -49,6 +51,8 @@ type Config struct {
 	// AgentAPK is the Android agent (make agent) served at /android/agent.apk
 	AgentAPK string
 }
+
+var headwindPath = regexp.MustCompile(`^(/[A-Za-z0-9_-]+)?$`)
 
 // Load reads the environment; every invalid variable is reported in the returned error.
 func Load(getenv func(string) string) (*Config, error) {
@@ -106,9 +110,14 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.HeadwindPassword == "" {
 			errs = append(errs, errors.New("HMDM_PASSWORD is empty: the password of HMDM_LOGIN in Headwind MDM"))
 		}
-		if u, err := url.Parse(c.HeadwindPublicURL); c.HeadwindPublicURL == "" || err != nil ||
-			(u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			errs = append(errs, fmt.Errorf("HMDM_PUBLIC_URL %q: the http(s) URL of Headwind MDM the agents reach", c.HeadwindPublicURL))
+		if c.HeadwindPublicURL == "" && c.PublicURL != "" {
+			c.HeadwindPublicURL = c.PublicURL + "/hmdm"
+		}
+		// the agent puts the path in front of its requests as one segment (serverProject)
+		if u, err := url.Parse(c.HeadwindPublicURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
+			!headwindPath.MatchString(u.Path) || u.RawQuery != "" || u.Fragment != "" {
+			errs = append(errs, fmt.Errorf("HMDM_PUBLIC_URL %q: the http(s) URL of Headwind MDM the agents reach, "+
+				"with one path segment at most, e.g. https://mcloud.example.com/hmdm", c.HeadwindPublicURL))
 		}
 		defPort := "31000"
 		if strings.HasPrefix(c.HeadwindPublicURL, "https://") {
