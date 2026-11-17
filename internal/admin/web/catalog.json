@@ -1,0 +1,615 @@
+[
+ {
+  "group": "Information",
+  "type": "DeviceInformation",
+  "supervised": false,
+  "args": {
+   "Queries": [
+    "DeviceName",
+    "OSVersion",
+    "BuildVersion",
+    "ModelName",
+    "Model",
+    "ProductName",
+    "SerialNumber",
+    "UDID",
+    "IsSupervised",
+    "IsActivationLockEnabled",
+    "IsDeviceLocatorServiceEnabled",
+    "BatteryLevel",
+    "DeviceCapacity",
+    "AvailableDeviceCapacity",
+    "WiFiMAC",
+    "BluetoothMAC",
+    "IMEI",
+    "IsCloudBackupEnabled",
+    "IsMDMLostModeEnabled",
+    "TimeZone",
+    "Languages",
+    "Locales",
+    "SoftwareUpdateDeviceID",
+    "SupplementalBuildVersion",
+    "SupplementalOSVersionExtra"
+   ]
+  },
+  "danger": false,
+  "hint": "Properties of the device: iOS version, model, serial number, battery, storage, MAC, supervision, Activation Lock. Queries lists the keys to return (unknown keys are skipped). Checked on iOS 18.7.11: Acknowledged, QueryResponses."
+ },
+ {
+  "group": "Information",
+  "type": "SecurityInfo",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Security: passcode present, encryption, compliance with the profiles, management status (supervised, enrolled via ADE). Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Information",
+  "type": "CertificateList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Certificates installed by profiles, e.g. the device identity of SCEP. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Information",
+  "type": "ProfileList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Installed profiles: the Identifier is for RemoveProfile, IsManaged=true when MDM installed it. The 'installed' marks of the ready profiles come from it. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Information",
+  "type": "ProvisioningProfileList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Provisioning profiles of the apps (ad-hoc / enterprise signing, e.g. WebDriverAgent); the UUID is for RemoveProvisioningProfile. Checked on iOS 18.7.11: empty."
+ },
+ {
+  "group": "Information",
+  "type": "Restrictions",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "The restrictions in force, merged from all profiles (GlobalRestrictions). Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Information",
+  "type": "InstalledApplicationList",
+  "supervised": false,
+  "args": {
+   "ManagedAppsOnly": false
+  },
+  "danger": false,
+  "hint": "Apps of the user (the system apps are not listed). ManagedAppsOnly=true: the apps installed by MDM only; Identifiers narrows the list. Checked on iOS 18.7.11: empty on an erased device."
+ },
+ {
+  "group": "Information",
+  "type": "ManagedApplicationList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Apps installed by MDM (InstallApplication) and their install state. Checked on iOS 18.7.11: empty."
+ },
+ {
+  "group": "Information",
+  "type": "ManagedMediaList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Books / PDFs installed by InstallMedia. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Information",
+  "type": "UserList",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Users of a Shared iPad, not on iPhone. Checked on iOS 18.7.11: Error 12021 'not a valid request type'."
+ },
+ {
+  "group": "Device",
+  "type": "RestartDevice",
+  "supervised": true,
+  "args": {
+   "NotifyUser": false
+  },
+  "danger": true,
+  "hint": "Restart. NotifyUser is macOS only. The enrollment survives the restart. Checked on iOS 18.7.11: Acknowledged, back in about 1.5 minutes."
+ },
+ {
+  "group": "Device",
+  "type": "ShutDownDevice",
+  "supervised": true,
+  "args": {},
+  "danger": true,
+  "hint": "Shut down. Only the button of the device turns it on again: a visit to the farm. Not checked."
+ },
+ {
+  "group": "Device",
+  "type": "DeviceLock",
+  "supervised": false,
+  "args": {
+   "Message": "Locked by MCloud",
+   "PhoneNumber": ""
+  },
+  "danger": true,
+  "hint": "Locks the screen. Message / PhoneNumber are shown only with a passcode. Checked on iOS 18.7.11: Acknowledged, MessageResult=NoPasscodeSet."
+ },
+ {
+  "group": "Device",
+  "type": "ClearPasscode",
+  "supervised": false,
+  "args": {},
+  "danger": true,
+  "hint": "Removes the passcode with the UnlockToken the device sent at the enrollment, filled in by mcloud-mdm (the UnlockToken tag of the device). Checked on iOS 18.7.11: Acknowledged (no passcode was set)."
+ },
+ {
+  "group": "Device",
+  "type": "ClearRestrictionsPassword",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Clears the Screen Time / restrictions passcode. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Device",
+  "type": "EraseDevice",
+  "supervised": false,
+  "args": {
+   "PreserveDataPlan": true,
+   "DisallowProximitySetup": false
+  },
+  "danger": true,
+  "hint": "ERASES the device. Without ADE supervision and MDM are gone afterwards: activate, prepare, Developer Mode and enroll again over USB. Not checked."
+ },
+ {
+  "group": "Device",
+  "type": "DeviceConfigured",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Ends 'Await Configuration' of Setup Assistant of an ADE enrollment, no effect otherwise. Checked on iOS 18.7.11: Acknowledged, no effect."
+ },
+ {
+  "group": "Device",
+  "type": "RequestMirroring",
+  "supervised": false,
+  "args": {
+   "DestinationName": "",
+   "ScanTime": 30
+  },
+  "danger": false,
+  "hint": "Starts AirPlay mirroring to a receiver (DestinationName or DestinationDeviceID) of the same network. Checked on iOS 18.7.11: Error 1301 'destination could not be found' with no receiver."
+ },
+ {
+  "group": "Device",
+  "type": "StopMirroring",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Stops AirPlay mirroring. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Device",
+  "type": "RefreshCellularPlans",
+  "supervised": false,
+  "args": {
+   "eSIMServerURL": "https://"
+  },
+  "danger": false,
+  "hint": "Refreshes the eSIM plans from the server of the carrier: eSIMServerURL must be its real URL. Checked on iOS 18.7.11: CommandFormatError with an empty URL."
+ },
+ {
+  "group": "Lost Mode",
+  "type": "EnableLostMode",
+  "supervised": true,
+  "args": {
+   "Message": "This device belongs to the MCloud device farm",
+   "PhoneNumber": "",
+   "Footnote": ""
+  },
+  "danger": true,
+  "hint": "Lost Mode: the screen is locked with the message (Message or PhoneNumber is required) until DisableLostMode; DeviceLocation and PlaySound work only in it. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Lost Mode",
+  "type": "DisableLostMode",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Ends Lost Mode, the device shows a notification. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Lost Mode",
+  "type": "DeviceLocation",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "The location (latitude, longitude, accuracy), in Lost Mode with Location Services only. Checked on iOS 18.7.11: Acknowledged, accuracy about 15 m."
+ },
+ {
+  "group": "Lost Mode",
+  "type": "PlayLostModeSound",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "A loud sound, in Lost Mode only. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Activation Lock",
+  "type": "ActivationLockBypassCode",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "The code that activates an erased device locked by an Apple ID: keep it in the secret store. Checked on iOS 18.7.11: code received."
+ },
+ {
+  "group": "Activation Lock",
+  "type": "ClearActivationLockBypassCode",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Removes the bypass code from the device once it is kept. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings",
+  "supervised": false,
+  "args": {
+   "Settings": [
+    {
+     "Item": "DeviceName",
+     "DeviceName": "MCloud-Device"
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Device name (supervised). Every item of Settings has its own Status in the report. Checked on iOS 18.7.11: renamed at once."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: TimeZone",
+  "supervised": true,
+  "args": {
+   "Settings": [
+    {
+     "Item": "TimeZone",
+     "TimeZone": "Europe/Warsaw"
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Time zone (an IANA name). Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: Bluetooth",
+  "supervised": true,
+  "args": {
+   "Settings": [
+    {
+     "Item": "Bluetooth",
+     "Enabled": false
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Bluetooth on / off. Checked on iOS 18.7.11: off and on Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: Wallpaper",
+  "supervised": true,
+  "args": {
+   "Settings": [
+    {
+     "Item": "Wallpaper",
+     "Where": 2,
+     "Image": {
+      "$data": ""
+     }
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Wallpaper from a PNG / JPEG (choose the file below). Where: 1 lock screen, 2 home screen, 3 both. Checked on iOS 18.7.11: home screen changed."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: DataRoaming",
+  "supervised": false,
+  "args": {
+   "Settings": [
+    {
+     "Item": "DataRoaming",
+     "Enabled": false
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Data roaming, no effect without a SIM. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: PersonalHotspot",
+  "supervised": false,
+  "args": {
+   "Settings": [
+    {
+     "Item": "PersonalHotspot",
+     "Enabled": false
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "Personal Hotspot, no effect without a SIM. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: SoftwareUpdateSettings",
+  "supervised": false,
+  "args": {
+   "Settings": [
+    {
+     "Item": "SoftwareUpdateSettings",
+     "RecommendationCadence": 0
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "How updates are offered: 0 all, 1 the older branch only, 2 the newest only. To hide updates on iOS 18 use the ready profile 'Hide iOS updates for 90 days' (the DDM deferral did not hide them). Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Settings",
+  "type": "Settings: OrganizationInfo",
+  "supervised": false,
+  "args": {
+   "Settings": [
+    {
+     "Item": "OrganizationInfo",
+     "OrganizationInfo": {
+      "OrganizationName": "Zebrunner MCloud"
+     }
+    }
+   ]
+  },
+  "danger": false,
+  "hint": "The organization name shown in Settings and the MDM dialogs. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Profiles",
+  "type": "InstallProfile",
+  "supervised": false,
+  "args": {
+   "Payload": {
+    "$data": ""
+   }
+  },
+  "danger": false,
+  "hint": "Installs a .mobileconfig (choose the file below) with no prompt on the device; RemoveProfile removes what MDM installed. See also the ready profiles. Checked on iOS 18.7.11: a web clip installed."
+ },
+ {
+  "group": "Profiles",
+  "type": "RemoveProfile",
+  "supervised": false,
+  "args": {
+   "Identifier": ""
+  },
+  "danger": true,
+  "hint": "Removes a profile installed by MDM by its Identifier of ProfileList. Never the MDM profile itself: the device leaves MDM (enroll it again with the agent of its host). Checked on iOS 18.7.11: the web clip removed."
+ },
+ {
+  "group": "Profiles",
+  "type": "InstallProvisioningProfile",
+  "supervised": false,
+  "args": {
+   "ProvisioningProfile": {
+    "$data": ""
+   }
+  },
+  "danger": false,
+  "hint": "Installs a .mobileprovision (choose the file), e.g. to renew the signing of WebDriverAgent without a reinstall. Not checked."
+ },
+ {
+  "group": "Profiles",
+  "type": "RemoveProvisioningProfile",
+  "supervised": false,
+  "args": {
+   "UUID": ""
+  },
+  "danger": false,
+  "hint": "Removes a provisioning profile by its UUID of ProvisioningProfileList. Checked on iOS 18.7.11: Acknowledged even for an unknown UUID."
+ },
+ {
+  "group": "Applications",
+  "type": "InstallApplication",
+  "supervised": false,
+  "args": {
+   "ManifestURL": "https://<host>/manifest.plist",
+   "ManagementFlags": 1
+  },
+  "danger": false,
+  "hint": "Installs an app: ManifestURL of an https manifest of an ipa (ad-hoc / enterprise) or iTunesStoreID (needs a VPP license). ManagementFlags=1 removes the app with MDM. Checked on iOS 18.7.11: Error 2604 'Could not validate manifest' with no URL."
+ },
+ {
+  "group": "Applications",
+  "type": "RemoveApplication",
+  "supervised": false,
+  "args": {
+   "Identifier": ""
+  },
+  "danger": true,
+  "hint": "Removes an app installed by MDM by its bundle ID (not the apps of the user). Checked on iOS 18.7.11: Error 12038 'not managed'."
+ },
+ {
+  "group": "Applications",
+  "type": "ValidateApplications",
+  "supervised": false,
+  "args": {
+   "Identifiers": []
+  },
+  "danger": false,
+  "hint": "Validates the signing of the enterprise / ad-hoc apps, e.g. after a renewed provisioning profile. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Applications",
+  "type": "ManagedApplicationConfiguration",
+  "supervised": false,
+  "args": {
+   "Identifiers": []
+  },
+  "danger": false,
+  "hint": "The Managed App Configuration of the managed apps. Checked on iOS 18.7.11: empty."
+ },
+ {
+  "group": "Applications",
+  "type": "ManagedApplicationAttributes",
+  "supervised": false,
+  "args": {
+   "Identifiers": []
+  },
+  "danger": false,
+  "hint": "The attributes of the managed apps (VPN UUID, domains, ...). Checked on iOS 18.7.11: empty."
+ },
+ {
+  "group": "Applications",
+  "type": "ManagedApplicationFeedback",
+  "supervised": false,
+  "args": {
+   "Identifiers": [],
+   "DeleteFeedback": false
+  },
+  "danger": false,
+  "hint": "The feedback the managed apps write for MDM. Checked on iOS 18.7.11: empty."
+ },
+ {
+  "group": "Applications",
+  "type": "ApplyRedemptionCode",
+  "supervised": false,
+  "args": {
+   "Identifier": "",
+   "RedemptionCode": ""
+  },
+  "danger": false,
+  "hint": "An App Store redemption code of an app waiting for one (old VPP flow). Checked on iOS 18.7.11: Error 2611 'Not waiting for redemption code'."
+ },
+ {
+  "group": "Applications",
+  "type": "InviteToProgram",
+  "supervised": false,
+  "args": {
+   "ProgramID": "com.apple.cloudvpp",
+   "InvitationURL": ""
+  },
+  "danger": false,
+  "hint": "Invitation to the VPP program of Apple Business: a real InvitationURL is needed. Checked on iOS 18.7.11: Error 12008."
+ },
+ {
+  "group": "Media",
+  "type": "InstallMedia",
+  "supervised": false,
+  "args": {
+   "MediaType": "Book",
+   "MediaURL": "https://",
+   "PersistentID": "com.mdmlab.book"
+  },
+  "danger": false,
+  "hint": "Installs a book / PDF into Books from its URL. Checked on iOS 18.7.11: Acknowledged, State=Installing."
+ },
+ {
+  "group": "Media",
+  "type": "RemoveMedia",
+  "supervised": false,
+  "args": {
+   "MediaType": "Book",
+   "PersistentID": "com.mdmlab.book"
+  },
+  "danger": false,
+  "hint": "Removes a book by its PersistentID. Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "iOS updates (deprecated in iOS 26)",
+  "type": "AvailableOSUpdates",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "The updates of the device: name, Build, ProductKey (for ScheduleOSUpdate). Lists the deferred updates too. Checked on iOS 18.7.11: iOS 18.7.12 available."
+ },
+ {
+  "group": "iOS updates (deprecated in iOS 26)",
+  "type": "OSUpdateStatus",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "The download and install progress of an update. Checked on iOS 18.7.11: Idle."
+ },
+ {
+  "group": "iOS updates (deprecated in iOS 26)",
+  "type": "ScheduleOSUpdate",
+  "supervised": true,
+  "args": {
+   "Updates": [
+    {
+     "ProductKey": "",
+     "InstallAction": "DownloadOnly"
+    }
+   ]
+  },
+  "danger": true,
+  "hint": "May UPDATE iOS. InstallAction: DownloadOnly, InstallASAP, NotifyOnly, InstallLater, Default; ProductKey of AvailableOSUpdates. Use the DDM softwareupdate.enforcement.specific on iOS 26+. Not checked."
+ },
+ {
+  "group": "Declarative management (DDM)",
+  "type": "DeclarativeManagement",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Makes the device synchronize its DDM declarations (as 'DDM: synchronize' of the API tab). Checked on iOS 18.7.11: Acknowledged."
+ },
+ {
+  "group": "Shared iPad (not iPhone)",
+  "type": "LogOutUser",
+  "supervised": false,
+  "args": {},
+  "danger": false,
+  "hint": "Logs the user of a Shared iPad out. Checked on iOS 18.7.11: Error 12021 on iPhone."
+ },
+ {
+  "group": "Shared iPad (not iPhone)",
+  "type": "DeleteUser",
+  "supervised": false,
+  "args": {
+   "UserName": "",
+   "ForceDeletion": false
+  },
+  "danger": true,
+  "hint": "Deletes a user of a Shared iPad. Checked on iOS 18.7.11: Error 12021 on iPhone."
+ },
+ {
+  "group": "Shared iPad (not iPhone)",
+  "type": "UserConfigured",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Ends the setup of a user (Shared iPad). Checked on iOS 18.7.11: Error 12021 on iPhone."
+ },
+ {
+  "group": "Diagnostics (iOS 27+)",
+  "type": "TriggerEnhancedLogCollection",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Enhanced log collection, iOS 27+. Checked on iOS 18.7.11: Error 12021."
+ },
+ {
+  "group": "Diagnostics (iOS 27+)",
+  "type": "CancelEnhancedLogCollection",
+  "supervised": true,
+  "args": {},
+  "danger": false,
+  "hint": "Cancels the log collection, iOS 27+. Checked on iOS 18.7.11: Error 12021."
+ }
+]

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MCloud MDM</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#dfe3e8; --muted:#6b7280; --accent:#2563eb; --ok:#15803d; --err:#b91c1c; --warn:#b45309; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:#111827; }
+  header { background:#111827; color:#fff; padding:10px 18px; display:flex; gap:24px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .info { color:#cbd5e1; font-size:12px; }
+  header .info b { color:#fff; font-weight:500; }
+  main { display:grid; grid-template-columns: 330px 1fr 1fr; gap:14px; padding:14px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
+  .device { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; cursor:pointer; }
+  .device.selected { border-color:var(--accent); box-shadow:0 0 0 2px #2563eb33; }
+  .udid { font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; background:#e5e7eb; margin-right:4px; }
+  .tag.on { background:#dcfce7; color:var(--ok); }
+  .tag.off { background:#fee2e2; color:var(--err); }
+  .muted { color:var(--muted); font-size:12px; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:5px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  select, input[type=text], input[type=password] { font:inherit; padding:5px; border:1px solid var(--line); border-radius:6px; }
+  select { max-width:100%; }
+  textarea { width:100%; font:12px/1.4 ui-monospace, Menlo, monospace; border:1px solid var(--line); border-radius:6px; padding:6px; }
+  pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; margin:6px 0 0; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover, tbody tr.selected { background:#eff6ff; }
+  .Acknowledged { color:var(--ok); font-weight:600; }
+  .Error, .CommandFormatError { color:var(--err); font-weight:600; }
+  .NotNow, .Queued { color:var(--warn); font-weight:600; }
+  .Cleared { color:var(--muted); font-weight:600; text-decoration:line-through; }
+  .scroll { max-height:300px; overflow:auto; }
+  .tabs button.active { background:#111827; color:#fff; border-color:#111827; }
+  #toast { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:6px; max-width:520px; display:none; white-space:pre-wrap; font-size:12px; }
+  .full { grid-column: 2 / span 2; }
+  .hint { background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:6px 8px; margin:6px 0; font-size:12px; color:#78350f; }
+  .hint:empty { display:none; }
+  .presets { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:10px; }
+  .preset { border:1px solid var(--line); border-radius:6px; padding:10px; }
+  .preset h3 { font-size:14px; margin:0 0 4px; }
+  .preset input { width:150px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCloud MDM</h1>
+  <span class="info">MDM <b id="mdmUrl">-</b></span>
+  <span class="info">Topic <b id="topic">-</b></span>
+  <span class="info">Push certificate until <b id="pushExp">-</b></span>
+  <span class="info" id="refresh">-</span>
+</header>
+<main>
+  <section style="grid-row: span 3">
+    <h2>Devices</h2>
+    <div id="devices" class="muted">loading...</div>
+    <div class="hint">A device is enrolled over USB by the agent of its host with the enrollment profile of <code id="enrollUrl">/mdm/enroll</code> (a one-time SCEP challenge per profile). The agent also recovers a device that lost MDM and turns Developer Mode on: neither has an MDM command.</div>
+  </section>
+
+  <section>
+    <h2>Command</h2>
+    <div class="muted">Device: <span id="target" class="udid">none</span></div>
+    <div class="row" id="quick"></div>
+    <div class="row"><select id="catalog"></select></div>
+    <div class="muted" id="cmdNote"></div>
+    <div class="hint" id="cmdHint"></div>
+    <textarea id="args" rows="9" spellcheck="false"></textarea>
+    <div class="row">
+      <button class="primary" id="send">Send</button>
+      <button id="push">Push only</button>
+      <label class="muted">File into the first empty <code>{"$data": ""}</code>: <input type="file" id="dataFile"></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Report</h2>
+    <div class="muted" id="detailTitle">choose a command of the history</div>
+    <pre id="detail">-</pre>
+  </section>
+
+  <section>
+    <h2>Commands</h2>
+    <div class="hint"><b class="Queued">Queued</b> waits for the device (no network or push: Push only) - <b class="Acknowledged">Acknowledged</b> done - <b class="Error">Error</b> refused, the reason is the ErrorChain of the report - <b class="CommandFormatError">CommandFormatError</b> invalid arguments - <b class="NotNow">NotNow</b> busy or locked, the device retries - <b class="Cleared">Cleared</b> never delivered: the device enrolled again and NanoMDM cleared its queue</div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Sent</th><th>Command</th><th>Status</th><th>Answered</th><th>Device</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Device events (webhook)</h2>
+    <div class="hint"><b>Authenticate</b> / <b>TokenUpdate</b> enrollment - <b>Connect Idle</b> the device connected and took its queue - <b>Connect &lt;status&gt;</b> a report - <b>CheckOut</b> the MDM profile was removed - <b>DeclarativeManagement</b> DDM synchronization</div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Event</th><th>Device</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="full">
+    <h2>Ready profiles</h2>
+    <div class="hint">Installed on the selected device by InstallProfile with no prompt, removed by RemoveProfile. "installed" comes from ProfileList, refreshed after an install, a removal and an enrollment; "?" means no data or data older than the last enrollment ("Check" refreshes it).</div>
+    <div class="row"><button id="presetsCheck">Check (ProfileList)</button><span class="muted" id="presetsSeen"></span></div>
+    <div id="presets" class="presets"></div>
+  </section>
+
+  <section class="full">
+    <div class="row tabs"><button data-tab="raw" class="active">NanoHUB API (DDM, NanoCMD, ...)</button><button data-tab="cert">Push certificate</button></div>
+    <div id="tab-raw">
+      <div class="row"><select id="rawPreset"></select></div>
+      <div class="hint" id="rawHint"></div>
+      <div class="row">
+        <select id="rawMethod"><option>GET</option><option>PUT</option><option>POST</option><option>DELETE</option></select>
+        <input type="text" id="rawPath" style="flex:1">
+        <button class="primary" id="rawSend">Run</button>
+      </div>
+      <textarea id="rawBody" rows="6" spellcheck="false" placeholder="request body (JSON / plist)"></textarea>
+      <pre id="rawOut">-</pre>
+    </div>
+    <div id="tab-cert" style="display:none">
+      <div class="hint">The APNs push certificate of identity.apple.com and its private key, PEM. Renew it every year with the SAME Apple ID: a new certificate (another topic) means enrolling every device again.</div>
+      <div class="row">Certificate <input type="file" id="certFile" accept=".pem,.crt,.cer"> Private key <input type="file" id="keyFile" accept=".pem,.key"><button class="primary" id="certSend">Upload to NanoHUB</button></div>
+      <pre id="certOut">-</pre>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let catalog = [], presets = [], state = null, selectedDevice = localStorage.getItem("device") || "", selectedCommand = "";
+
+const QUICK = ["DeviceInformation", "ProfileList", "InstalledApplicationList", "SecurityInfo", "CertificateList", "Settings", "RestartDevice", "DeviceLock"];
+const RAW_PRESETS = [
+  ["DDM: declarations", "GET", "api/v1/ddm/declarations", "",
+   "The declarations of the server. A configuration does nothing alone: an activation applies it, a set bound to the device delivers both."],
+  ["DDM 1/4: configuration - defer iOS updates 90 days", "PUT", "api/v1/ddm/declarations",
+   JSON.stringify({Type: "com.apple.configuration.softwareupdate.settings", Identifier: "com.zebrunner.mcloud.mdm.swupdate",
+                   Payload: {Deferrals: {CombinedPeriodInDays: 90}, Notifications: false,
+                             AutomaticActions: {Download: "AlwaysOff", InstallOSUpdates: "AlwaysOff", InstallSecurityUpdate: "AlwaysOff"}}}, null, 2),
+   "iOS 18+, supervised. Checked on iOS 18.7.11: active and valid, no automatic download or offer, but iOS 18.7.12 (8 days old) stayed visible in Software Update: the deferral did not hide it. The ready profile 'Hide iOS updates for 90 days' hides it (iOS 26 at most)."],
+  ["DDM 2/4: activation of the configurations", "PUT", "api/v1/ddm/declarations",
+   JSON.stringify({Type: "com.apple.activation.simple", Identifier: "com.zebrunner.mcloud.mdm.activation",
+                   Payload: {StandardConfigurations: ["com.zebrunner.mcloud.mdm.swupdate", "com.zebrunner.mcloud.mdm.status"]}}, null, 2),
+   "Without an activation a configuration is inactive (Info.NotReferencedByActivation). StandardConfigurations lists the Identifiers of the configurations."],
+  ["DDM: status subscriptions (updates, battery, passcode)", "PUT", "api/v1/ddm/declarations",
+   JSON.stringify({Type: "com.apple.configuration.management.status-subscriptions", Identifier: "com.zebrunner.mcloud.mdm.status",
+                   Payload: {StatusItems: ["softwareupdate.pending-version", "softwareupdate.install-state", "softwareupdate.install-reason",
+                                           "softwareupdate.failure-reason", "device.power.battery-health", "passcode.is-present"].map(Name => ({Name}))}}, null, 2),
+   "The device reports these values when they change ('DDM: status values'). Checked on iOS 18.7.11: battery-health=normal reported; the others come when they have a value."],
+  ["DDM 3/4: add a declaration to the set mcloud", "PUT", "api/v1/ddm/set-declarations/mcloud?declaration=com.zebrunner.mcloud.mdm.swupdate", "",
+   "Repeat for every declaration (the configurations and the activation), changing ?declaration=."],
+  ["DDM 4/4: bind the set to the device", "PUT", "api/v1/ddm/enrollment-sets/{udid}?set=mcloud", "",
+   "The server notifies the device by itself; otherwise 'DDM: synchronize'. mcloud-mdm notifies every new enrollment."],
+  ["DDM: synchronize the device (notify)", "POST", "api/v1/ddm/notify?id={udid}", "", "Sends DeclarativeManagement: the device takes its declarations and reports their status."],
+  ["DDM: declaration status of the device", "GET", "api/v1/ddm/declaration-status/{udid}", "", "active / valid of every declaration; valid=unknown and active=false: see the status errors."],
+  ["DDM: status errors", "GET", "api/v1/ddm/status-errors/{udid}", "", "Why a declaration is not applied, the newest first."],
+  ["DDM: status values", "GET", "api/v1/ddm/status-values/{udid}", "", "Everything the device reported by DDM."],
+  ["DDM: sets of the device", "GET", "api/v1/ddm/enrollment-sets/{udid}", "", ""],
+  ["DDM: remove a declaration from the set", "DELETE", "api/v1/ddm/set-declarations/mcloud?declaration=com.zebrunner.mcloud.mdm.swupdate", "", "The device removes it at its next synchronization."],
+  ["DDM: example - enforce an iOS version by a date", "PUT", "api/v1/ddm/declarations",
+   JSON.stringify({Type: "com.apple.configuration.softwareupdate.enforcement.specific", Identifier: "com.zebrunner.mcloud.mdm.osupdate",
+                   Payload: {TargetOSVersion: "18.7.12", TargetLocalDateTime: "2030-01-01T00:00:00"}}, null, 2),
+   "Once activated the device UPDATES itself to TargetOSVersion by the date (the replacement of ScheduleOSUpdate in iOS 26+). Test devices only."],
+  ["NanoCMD: inventory", "GET", "api/v1/nanocmd/inventory?id={udid}", "", "The device data NanoCMD collected (the inventory workflow)."],
+  ["NanoCMD: start the inventory workflow", "POST", "api/v1/nanocmd/workflow/io.micromdm.wf.inventory.v1/start?id={udid}", "", ""],
+  ["NanoCMD: start a workflow on enrollment", "PUT", "api/v1/nanocmd/event/enroll",
+   JSON.stringify({event: "Enrollment", workflow: "io.micromdm.wf.inventory.v1"}, null, 2),
+   "Events: Enrollment, Authenticate, TokenUpdate, CheckOut, Idle; 'enroll' of the path is any name of the subscription. Its GET answers 500 'key not found' before it exists."],
+  ["NanoMDM: push", "GET", "api/v1/nanomdm/push/{udid}", "", "APNs push only: the device connects and takes its queue."],
+  ["NanoHUB: version", "GET", "version", "", ""],
+];
+
+function toast(text, ms = 4000) { const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms); }
+
+async function call(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.status);
+  return data;
+}
+
+function cell(text, cls) { const td = document.createElement("td"); td.textContent = text ?? ""; if (cls) td.className = cls; return td; }
+function short(u) { return u ? u.slice(0, 8) + "..." + u.slice(-6) : ""; }
+function time(t) { return t ? t.replace("T", " ").replace("Z", "").slice(5, 19) : ""; }
+
+function renderDevices() {
+  const box = $("devices"); box.innerHTML = "";
+  const devices = (state.devices || []).slice().sort((a, b) => a.udid.localeCompare(b.udid));
+  if (!devices.length) { box.textContent = "no device enrolled yet"; return; }
+  if (!devices.some(d => d.udid === selectedDevice)) selectedDevice = devices[0].udid;
+  for (const d of devices) {
+    const div = document.createElement("div");
+    div.className = "device" + (d.udid === selectedDevice ? " selected" : "");
+    const udid = document.createElement("div"); udid.className = "udid"; udid.textContent = d.udid;
+    const tags = document.createElement("div"); tags.className = "row";
+    const enrolled = d.enrolled_at && !d.checked_out;
+    tags.innerHTML = `<span class="tag ${enrolled ? "on" : "off"}">${enrolled ? "enrolled" : (d.checked_out ? "left MDM (CheckOut)" : "enrolling")}</span>${d.unlock_token ? '<span class="tag">UnlockToken</span>' : ""}`;
+    const info = document.createElement("div"); info.className = "muted";
+    info.textContent = [d.product, d.os_version && "iOS " + d.os_version, d.serial].filter(Boolean).join(", ") +
+      (d.last_seen_at ? ` - seen ${time(d.last_seen_at)}` : "");
+    const actions = document.createElement("div"); actions.className = "row";
+    if (enrolled) {
+      const b = document.createElement("button"); b.textContent = "Push";
+      b.title = "APNs push only: the device connects and takes its queue; useful for a command stuck in Queued.";
+      b.onclick = (e) => { e.stopPropagation(); doPush(d.udid); }; actions.appendChild(b);
+    }
+    div.append(udid, tags, info, actions);
+    div.onclick = () => { selectedDevice = d.udid; localStorage.setItem("device", d.udid); renderDevices(); renderPresets(); };
+    box.appendChild(div);
+  }
+  $("target").textContent = selectedDevice || "none";
+}
+
+function renderHistory() {
+  const body = $("history"); body.innerHTML = "";
+  for (const c of state.commands || []) {
+    const tr = document.createElement("tr");
+    if (c.uuid === selectedCommand) tr.className = "selected";
+    tr.append(cell(time(c.sent_at)), cell(c.type), cell(c.status, c.status), cell(time(c.answered_at)), cell(short(c.udid)));
+    tr.onclick = () => { selectedCommand = c.uuid; renderHistory(); renderDetail(); };
+    body.appendChild(tr);
+  }
+}
+
+function renderDetail() {
+  const c = (state.commands || []).find(x => x.uuid === selectedCommand);
+  if (!c) return;
+  $("detailTitle").textContent = `${c.type} - ${c.status} - ${c.uuid}`;
+  $("detail").textContent = JSON.stringify({args: c.args, report: c.report ?? "(no report yet)", enqueue: c.enqueue}, null, 2);
+}
+
+function renderEvents() {
+  const body = $("events"); body.innerHTML = "";
+  for (const e of (state.events || []).slice(0, 150)) {
+    const tr = document.createElement("tr");
+    tr.append(cell(time(e.at)), cell(e.event, e.event.split(" ")[1]), cell(short(e.udid)));
+    tr.title = e.detail ? JSON.stringify(e.detail) : "";
+    body.appendChild(tr);
+  }
+}
+
+function renderPresets() {
+  const seen = (state.profiles || {})[selectedDevice];
+  $("presetsSeen").textContent = !seen ? "no ProfileList yet"
+    : seen.stale ? `ProfileList of ${time(seen.at)} is older than the last enrollment: Check` : `ProfileList of ${time(seen.at)}`;
+  const known = seen && !seen.stale;
+  for (const p of presets) {
+    const tag = $("preset-tag-" + p.name);
+    const on = known && (seen.ids || []).includes(p.identifier);
+    tag.className = "tag " + (known && on ? "on" : "");
+    tag.textContent = known ? (on ? "installed" : "not installed") : "?";
+  }
+}
+
+async function refresh() {
+  try {
+    state = await call("api/state");
+    $("mdmUrl").textContent = state.server.mdm_url;
+    $("enrollUrl").textContent = state.server.enroll_url;
+    $("topic").textContent = state.server.topic || "no push certificate";
+    $("pushExp").textContent = state.server.push_not_after || "-";
+    $("refresh").textContent = "updated " + new Date().toLocaleTimeString();
+    renderDevices(); renderHistory(); renderDetail(); renderEvents(); renderPresets();
+  } catch (e) { $("refresh").textContent = "error: " + e.message; }
+}
+
+function chooseCommand(type) {
+  const c = catalog.find(x => x.type === type) || catalog[0];
+  $("catalog").value = c.type;
+  $("args").value = JSON.stringify(c.args, null, 2);
+  $("cmdNote").textContent = [c.supervised ? "supervised only" : "", c.danger ? "changes the device: asks first" : ""].filter(Boolean).join(" - ");
+  $("cmdHint").textContent = c.hint || "";
+}
+
+async function doSend() {
+  const c = catalog.find(x => x.type === $("catalog").value);
+  if (!selectedDevice) return toast("choose a device");
+  let args;
+  try { args = JSON.parse($("args").value || "{}"); } catch (e) { return toast("the arguments are not JSON: " + e.message); }
+  if (c.danger && !confirm(`${c.type} on ${selectedDevice}?`)) return;
+  try {
+    const r = await call("api/command", {udid: selectedDevice, type: c.type, args});
+    selectedCommand = r.uuid; toast(`${c.type} sent (${r.uuid.slice(0, 8)})`); refresh();
+  } catch (e) { toast("error: " + e.message, 8000); }
+}
+
+async function doPush(udid) { try { const r = await call("api/push", {udid}); toast("push: " + r.response); } catch (e) { toast("error: " + e.message); } }
+
+function fileToBase64(file) {
+  return new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.onerror = fail; r.readAsDataURL(file); });
+}
+
+function buildPresets() {
+  const box = $("presets");
+  for (const p of presets) {
+    const div = document.createElement("div"); div.className = "preset";
+    const h = document.createElement("h3"); h.textContent = p.title + " ";
+    const tag = document.createElement("span"); tag.id = "preset-tag-" + p.name; h.appendChild(tag);
+    const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = p.hint;
+    const id = document.createElement("div"); id.className = "muted udid"; id.textContent = p.identifier;
+    div.append(h, hint, id);
+    const inputs = {};
+    if ((p.params || []).length) {
+      const row = document.createElement("div"); row.className = "row";
+      for (const key of p.params) {
+        let el;
+        if (key === "encryption") {
+          el = document.createElement("select");
+          for (const v of ["Any", "WPA2", "WPA3", "WPA", "None"]) { const o = document.createElement("option"); o.textContent = v; el.appendChild(o); }
+        } else {
+          el = document.createElement("input"); el.type = key === "password" ? "password" : "text"; el.placeholder = key; el.autocomplete = "off";
+        }
+        inputs[key] = el; row.appendChild(el);
+      }
+      div.appendChild(row);
+    }
+    const actions = document.createElement("div"); actions.className = "row";
+    const btn = (label, cls, fn) => { const b = document.createElement("button"); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; actions.appendChild(b); };
+    btn("Install", "primary", async () => {
+      if (!selectedDevice) return toast("choose a device");
+      const params = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
+      if (p.name === "wifi-allowed-only" && !confirm(`The device will join ONLY "${params.ssid}". A wrong SSID or password leaves it without Wi-Fi and MDM until the agent of its host recovers it over USB. Go on?`)) return;
+      toast("installing...", 30000);
+      try { const r = await call("api/preset/install", {udid: selectedDevice, name: p.name, params}); toast(r.output, 8000); selectedCommand = r.uuid; }
+      catch (e) { toast("error: " + e.message, 10000); }
+      if (inputs.password) inputs.password.value = "";
+      refresh();
+    });
+    btn("Remove", "", async () => {
+      try { const r = await call("api/preset/remove", {udid: selectedDevice, name: p.name}); toast(r.output); selectedCommand = r.uuid; } catch (e) { toast("error: " + e.message, 8000); }
+      refresh();
+    });
+    div.appendChild(actions);
+    box.appendChild(div);
+  }
+  $("presetsCheck").onclick = async () => {
+    if (!selectedDevice) return toast("choose a device");
+    try { const r = await call("api/command", {udid: selectedDevice, type: "ProfileList", args: {}}); selectedCommand = r.uuid; toast("ProfileList sent"); } catch (e) { toast("error: " + e.message); }
+  };
+}
+
+async function init() {
+  catalog = await call("api/catalog");
+  presets = await call("api/presets");
+  buildPresets();
+  const groups = {};
+  for (const c of catalog) (groups[c.group] ||= []).push(c);
+  for (const [g, items] of Object.entries(groups)) {
+    const og = document.createElement("optgroup"); og.label = g;
+    for (const c of items) { const o = document.createElement("option"); o.value = c.type; o.title = c.hint || ""; o.textContent = c.type + (c.supervised ? "  [S]" : "") + (c.danger ? "  (!)" : ""); og.appendChild(o); }
+    $("catalog").appendChild(og);
+  }
+  for (const q of QUICK) { const b = document.createElement("button"); b.textContent = q; b.title = (catalog.find(x => x.type === q) || {}).hint || ""; b.onclick = () => chooseCommand(q); $("quick").appendChild(b); }
+  $("catalog").onchange = () => chooseCommand($("catalog").value);
+  chooseCommand("DeviceInformation");
+  $("send").onclick = doSend;
+  $("push").onclick = () => selectedDevice && doPush(selectedDevice);
+  $("dataFile").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const b64 = await fileToBase64(f);
+    const text = $("args").value;
+    if (!text.includes('"$data": ""')) return toast('no empty {"$data": ""} in the arguments');
+    $("args").value = text.replace('"$data": ""', `"$data": "${b64}"`);
+    toast(`${f.name}: ${f.size} bytes inserted`); e.target.value = "";
+  };
+  for (const [label] of RAW_PRESETS) { const o = document.createElement("option"); o.textContent = label; $("rawPreset").appendChild(o); }
+  const preset = () => { const p = RAW_PRESETS[$("rawPreset").selectedIndex]; $("rawMethod").value = p[1]; $("rawPath").value = "/" + p[2]; $("rawBody").value = p[3]; $("rawHint").textContent = p[4] || ""; };
+  $("rawPreset").onchange = preset; preset();
+  $("rawSend").onclick = async () => {
+    try {
+      const r = await call("api/raw", {method: $("rawMethod").value, path: $("rawPath").value.replaceAll("{udid}", selectedDevice), body: $("rawBody").value});
+      let out = r.response; try { out = JSON.stringify(JSON.parse(out), null, 2); } catch (e) {}
+      $("rawOut").textContent = `HTTP ${r.status}\n${out}`;
+    } catch (e) { $("rawOut").textContent = "error: " + e.message; }
+  };
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
+    $("tab-raw").style.display = b.dataset.tab === "raw" ? "" : "none"; $("tab-cert").style.display = b.dataset.tab === "cert" ? "" : "none";
+  });
+  $("certSend").onclick = async () => {
+    const c = $("certFile").files[0], k = $("keyFile").files[0];
+    if (!c || !k) return toast("choose the certificate and its private key");
+    try { const r = await call("api/pushcert", {pem: (await c.text()) + "\n" + (await k.text())}); $("certOut").textContent = `topic ${r.topic}, until ${r.not_after}`; refresh(); }
+    catch (e) { $("certOut").textContent = "error: " + e.message; }
+  };
+  await refresh();
+  setInterval(refresh, 2000);
+}
+init();
+</script>
+</body>
+</html>

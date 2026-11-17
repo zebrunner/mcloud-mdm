@@ -1,0 +1,52 @@
+# The program is built by the Go image of the build platform for the target one, the image has no other package
+FROM --platform=${BUILDPLATFORM} golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/mcloud-mdm ./cmd/mcloud-mdm
+
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+
+# the defaults of the configuration, all of them are documented in README.md; MDM_PUBLIC_URL, NANOHUB_API_KEY and
+# MDM_ENROLL_TOKEN have none
+# the secrets are listed with an empty default only, as every variable of the configuration: they are set at run time
+# hadolint ignore=DL3064
+ENV MDM_PUBLIC_URL="" \
+    MDM_SCEP_URL="" \
+    MDM_DEVICE_LISTEN=":8080" \
+    MDM_ADMIN_LISTEN=":8081" \
+    MDM_DATA_DIR="/data" \
+    NANOHUB_URL="http://mdm-nanohub:9004" \
+    NANOHUB_API_KEY="" \
+    MDM_ENROLL_TOKEN="" \
+    MDM_PROFILE_ID="com.zebrunner.mcloud.mdm" \
+    MDM_ORG_NAME="Zebrunner MCloud" \
+    MDM_TLS_CA_FILE="" \
+    MDM_CHALLENGE_TTL="10m" \
+    MDM_CERT_DAYS=365 \
+    LOGGER_LEVEL=INFO
+
+WORKDIR /opt/zebrunner/
+
+COPY --from=build /out/mcloud-mdm /opt/zebrunner/mcloud-mdm
+
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="Zebrunner MCloud MDM" \
+      org.opencontainers.image.description="SCEP, enrollment profiles and the admin UI of the NanoHUB MDM of Zebrunner MCloud" \
+      org.opencontainers.image.source="https://github.com/zebrunner/mcloud-mdm" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}"
+
+VOLUME ["/data"]
+EXPOSE 8080 8081
+
+ENTRYPOINT ["/opt/zebrunner/mcloud-mdm"]
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/opt/zebrunner/mcloud-mdm", "-healthcheck"]

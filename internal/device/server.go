@@ -1,0 +1,100 @@
+// Package device serves the devices and the agents of the device hosts: SCEP, the enrollment profile and the
+// health check. The proxy of MCloud publishes it; the admin UI is on another listener.
+package device
+
+import (
+	"crypto/subtle"
+	"encoding/pem"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/zebrunner/mcloud-mdm/internal/config"
+	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
+	"github.com/zebrunner/mcloud-mdm/internal/profile"
+	"github.com/zebrunner/mcloud-mdm/internal/scep"
+	"github.com/zebrunner/mcloud-mdm/internal/state"
+)
+
+// udidPattern: the UDIDs of the devices, the old 40 hex ones too
+var udidPattern = regexp.MustCompile(`^[0-9A-Fa-f-]{20,64}$`)
+
+// Server is the handler of the device listener.
+type Server struct {
+	Config *config.Config
+	SCEP   *scep.Server
+	State  *state.Store
+	Log    *slog.Logger
+	tlsCA  []byte
+}
+
+// New returns the server; the DER of MDM_TLS_CA_FILE is read once.
+func New(c *config.Config, s *scep.Server, st *state.Store, log *slog.Logger) (*Server, error) {
+	srv := &Server{Config: c, SCEP: s, State: st, Log: log}
+	if c.TLSCAFile != "" {
+		raw, err := os.ReadFile(c.TLSCAFile)
+		if err != nil {
+			return nil, err
+		}
+		block, _ := pem.Decode(raw)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("MDM_TLS_CA_FILE %s: no PEM certificate", c.TLSCAFile)
+		}
+		srv.tlsCA = block.Bytes
+	}
+	return srv, nil
+}
+
+// Handler routes /scep, /mdm/enroll and /healthz.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/scep", s.SCEP)
+	mux.HandleFunc("GET /mdm/enroll", s.enroll)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	return mux
+}
+
+// enroll returns an enrollment profile with a fresh one-time challenge to an agent with the enrollment token; the
+// agent installs it over USB (go-ios, the supervision identity). The udid only names the device identity.
+func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.Config.EnrollToken)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="mcloud-mdm"`)
+		http.Error(w, "the enrollment token is required", http.StatusUnauthorized)
+		return
+	}
+	udid := r.URL.Query().Get("udid")
+	if udid != "" && !udidPattern.MatchString(udid) {
+		http.Error(w, "invalid udid", http.StatusBadRequest)
+		return
+	}
+	topic := s.State.Topic()
+	if topic == "" {
+		http.Error(w, "no APNs push certificate: upload it in the admin UI first", http.StatusServiceUnavailable)
+		return
+	}
+	challenge, err := s.SCEP.Challenges.New()
+	if err != nil {
+		http.Error(w, "challenge failed", http.StatusInternalServerError)
+		return
+	}
+	subject := "mcloud-mdm-" + nanohub.NewUUID()[:8]
+	if udid != "" {
+		subject = "mcloud-mdm-" + udid + "-" + nanohub.NewUUID()[:8]
+	}
+	data, err := profile.Enrollment{
+		ID: s.Config.ProfileID, OrgName: s.Config.OrgName, ServerURL: s.Config.PublicURL + "/mdm",
+		SCEPURL: s.Config.SCEPURL, Topic: topic, Challenge: challenge, Subject: subject, TLSCA: s.tlsCA,
+	}.Build()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.Log.Info("enrollment profile issued", "udid", udid, "remote", r.RemoteAddr)
+	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
+}

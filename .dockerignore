@@ -1,0 +1,11 @@
+# only go.mod, go.sum, cmd/ and internal/ are needed by the image build
+.git
+.github
+.idea
+.venv
+bin
+tests
+VERSION
+*.md
+.DS_Store
+**/.DS_Store

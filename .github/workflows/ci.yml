@@ -1,0 +1,78 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [develop, main, master]
+  pull_request:
+    branches: [develop, main, master]
+  workflow_dispatch:
+# a new push to a pull request cancels its outdated run, runs of the branches themselves are kept
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # the reusable lint job of mcloud-conventions (CONVENTIONS.md); the Go checks of tests/lint_project.sh use the Go of
+  # the runner, which downloads the toolchain of go.mod
+  lint:
+    uses: zebrunner/mcloud-conventions/.github/workflows/lint.yml@v1
+
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Go tests (make test)
+        run: make test
+        env:
+          JUNIT_DIR: ${{ runner.temp }}/junit
+      - name: Tests report
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@a16be3a69023e9bd7e748ede768b3282ea7b30ce # v6.7.1
+        with:
+          report_paths: ${{ runner.temp }}/junit/*.xml
+          check_name: tests report
+          annotate_only: true
+          detailed_summary: true
+          require_tests: true
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Docker image checks
+        run: tests/image_test.sh
+        env:
+          JUNIT_DIR: ${{ runner.temp }}/junit
+      - name: Docker report
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@a16be3a69023e9bd7e748ede768b3282ea7b30ce # v6.7.1
+        with:
+          report_paths: ${{ runner.temp }}/junit/*.xml
+          check_name: docker report
+          annotate_only: true
+          detailed_summary: true
+          require_tests: true
+      - name: Upload JUnit XML
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-docker
+          path: ${{ runner.temp }}/junit/
+
+  # the image of a merge into develop to public.ecr.aws after all the checks (CONVENTIONS.md#versions)
+  publish:
+    needs: [lint, tests, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+      id-token: write
+    uses: zebrunner/mcloud-conventions/.github/workflows/docker-publish.yml@v1
