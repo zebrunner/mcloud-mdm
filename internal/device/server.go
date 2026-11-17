@@ -52,12 +52,13 @@ func New(c *config.Config, s *scep.Server, st *state.Store, log *slog.Logger) (*
 	return srv, nil
 }
 
-// Handler routes /scep, /mdm/enroll, /android/enroll, /android/agent.apk and /healthz.
+// Handler routes /scep, /mdm/enroll, /android/enroll, /android/release, /android/agent.apk and /healthz.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/scep", s.SCEP)
 	mux.HandleFunc("GET /mdm/enroll", s.enroll)
 	mux.HandleFunc("GET /android/enroll", s.androidEnroll)
+	mux.HandleFunc("GET /android/release", s.androidRelease)
 	mux.HandleFunc("GET /android/agent.apk", s.agentAPK)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	return mux
@@ -147,6 +148,22 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(setup)
+}
+
+// androidRelease returns the adb shell command that releases a device without the server (android/release.sh): the
+// secret is its token, the enrollment token protects it
+func (s *Server) androidRelease(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(w, r) {
+		return
+	}
+	if s.Android == nil {
+		http.Error(w, "no Android: HMDM_URL is not set", http.StatusNotFound)
+		return
+	}
+	s.Log.Info("android release command issued", "serial", r.URL.Query().Get("serial"), "remote", r.RemoteAddr)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(s.Android.ReleaseCommand() + "\n"))
 }
 
 // agentAPK serves the Android agent: it is no secret, its signing key is

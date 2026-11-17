@@ -118,7 +118,8 @@ var Commands = []*Command{
 	{Name: "release", Title: "Release the device (remove MDM)", Push: releasePush, Danger: true,
 		Hint: "The agent gives up the device owner: every restriction goes away, no factory reset. The agent stays " +
 			"as a regular app (adb uninstall " + AgentPackage + "); Delete removes the device from the server. " +
-			"Over adb: adb shell dpm remove-active-admin " + AgentAdmin + "."},
+			"Without the server: android/release.sh on the host of the device (the secret of the server is the token). " +
+			"adb alone cannot remove the device owner."},
 }
 
 // Manager is the Android part of mcloud-mdm.
@@ -134,7 +135,8 @@ type Manager struct {
 	changed map[string]time.Time
 }
 
-// Setup is what a device host needs to enroll a device over adb.
+// Setup is what a device host needs to enroll a device over adb. The secret is the token of the agent too: whoever
+// has it may set the agent up again or release the device over adb, so only the hosts (MDM_ENROLL_TOKEN) get it.
 type Setup struct {
 	Serial    string   `json:"serial"`
 	BaseURL   string   `json:"base_url"`
@@ -142,6 +144,12 @@ type Setup struct {
 	AgentURL  string   `json:"agent_url,omitempty"`
 	ADB       []string `json:"adb"`
 	Configure string   `json:"configure"`
+	Release   string   `json:"release"`
+}
+
+// ReleaseCommand is the adb shell command that releases the device without the server (the token is the secret).
+func (m *Manager) ReleaseCommand() string {
+	return fmt.Sprintf("content call --uri %s --method release --extra token:s:%s", SetupURI, m.Secret)
 }
 
 func randomHex(n int) string {
@@ -215,10 +223,12 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 		return nil, err
 	}
 	s := &Setup{Serial: serial, BaseURL: m.PublicURL, Secret: m.Secret, AgentURL: agentURL}
-	s.Configure = fmt.Sprintf("content call --uri %s --method setup --arg %s --extra deviceId:s:%s --extra secret:s:%s",
-		SetupURI, m.PublicURL, serial, m.Secret)
+	// the token is the secret: an agent set up before accepts a new setup with it only
+	s.Configure = fmt.Sprintf("content call --uri %s --method setup --arg %s --extra deviceId:s:%s --extra secret:s:%s --extra token:s:%s",
+		SetupURI, m.PublicURL, serial, m.Secret, m.Secret)
+	s.Release = m.ReleaseCommand()
 	s.ADB = []string{
-		"adb -s " + serial + " install -t -r mcloud-mdm-agent.apk",
+		"adb -s " + serial + " install -r mcloud-mdm-agent.apk",
 		"adb -s " + serial + " shell dpm set-device-owner " + AgentAdmin,
 		"adb -s " + serial + " shell " + s.Configure,
 		"adb -s " + serial + " shell am start -n " + AgentPackage + "/.ui.MainActivity",

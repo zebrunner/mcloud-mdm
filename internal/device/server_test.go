@@ -12,6 +12,7 @@ import (
 
 	"howett.net/plist"
 
+	"github.com/zebrunner/mcloud-mdm/internal/android"
 	"github.com/zebrunner/mcloud-mdm/internal/config"
 	"github.com/zebrunner/mcloud-mdm/internal/scep"
 	"github.com/zebrunner/mcloud-mdm/internal/state"
@@ -118,6 +119,14 @@ func TestAndroidEndpoints(t *testing.T) {
 	}
 	if code, _ := get(t, srv.URL+"/android/enroll?serial=SER001", "0123456789abcdef"); code != http.StatusNotFound {
 		t.Errorf("no Headwind MDM: %d", code)
+	}
+	if code, _ := get(t, srv.URL+"/android/release", ""); code != http.StatusUnauthorized {
+		t.Errorf("release without the token: %d", code)
+	}
+	s.Android = &android.Manager{Secret: "0123456789abcdef0123"}
+	code, body := get(t, srv.URL+"/android/release", "0123456789abcdef")
+	if code != http.StatusOK || !strings.Contains(string(body), "--method release --extra token:s:0123456789abcdef0123") {
+		t.Errorf("release: %d %q", code, body)
 	}
 	if code, _ := get(t, srv.URL+"/android/agent.apk", ""); code != http.StatusNotFound {
 		t.Errorf("no APK: %d", code)

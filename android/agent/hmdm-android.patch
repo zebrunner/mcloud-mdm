@@ -16,14 +16,14 @@ index abcf02e..9d9baa4 100644
          buildConfigField("String", "SERVER_PROJECT", "\"\"")
          // This parameter manages how the device ID should be set up at first start
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 2aab588..8d98096 100644
+index 2aab588..ebb330f 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -116,6 +116,7 @@
      <uses-feature android:name="android.software.leanback" android:required="false" />
 
      <application
-+        android:testOnly="true"
++        android:allowBackup="false"
          android:icon="@mipmap/ic_launcher"
          android:label="@string/white_app_name"
          android:supportsRtl="true"
@@ -71,10 +71,10 @@ index 8d9a16f..45682e5 100644
 
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Release.java b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
 new file mode 100644
-index 0000000..ff42942
+index 0000000..5095032
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,40 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.app.admin.DevicePolicyManager;
@@ -85,7 +85,8 @@ index 0000000..ff42942
 +import com.hmdm.launcher.util.Utils;
 +
 +/**
-+ * MCloud: the "mcloudRelease" push. The agent clears the device owner by itself: no factory reset, no adb needed.
++ * MCloud: the "mcloudRelease" push and the "release" of SetupProvider (with the token). The agent clears the device
++ * owner by itself: no factory reset. adb cannot remove it: the agent is no test-only admin.
 + */
 +public final class Release {
 +
@@ -116,10 +117,10 @@ index 0000000..ff42942
 +}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
 new file mode 100644
-index 0000000..5daf40c
+index 0000000..dcc568e
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,56 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.content.Context;
@@ -149,6 +150,17 @@ index 0000000..5daf40c
 +        return prefs(context).getString(KEY, null) != null;
 +    }
 +
++    /** matches compares the token with the saved secret in constant time. */
++    static boolean matches(Context context, String token) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null || token == null) {
++            return false;
++        }
++        return java.security.MessageDigest.isEqual(
++                saved.getBytes(java.nio.charset.StandardCharsets.UTF_8),
++                token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
++    }
++
 +    static void load(Context context) {
 +        String saved = prefs(context).getString(KEY, null);
 +        if (saved != null && !saved.isEmpty()) {
@@ -167,10 +179,10 @@ index 0000000..5daf40c
 +}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
 new file mode 100644
-index 0000000..93adfda
+index 0000000..6e48b4c
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,117 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.content.ContentProvider;
@@ -184,14 +196,17 @@ index 0000000..93adfda
 +import com.hmdm.launcher.util.Utils;
 +
 +/**
-+ * MCloud: configures the agent over adb without the screen.
++ * MCloud: configures and releases the agent over adb without the screen.
 + *
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup \
-+ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SHARED_SECRET
-+ * (the url goes in --arg: "content" refuses colons in the values of --extra)
++ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SECRET --extra token:s:SECRET
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:SECRET
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method status
++ * (the url goes in --arg: "content" refuses colons in the values of --extra)
 + *
-+ * Only adb shell and root may call it: an app on the device must not be able to move the device to another server.
++ * Only adb shell and root may call it. Every user of adb is the shell uid (the remote debug of the farm too), so once
++ * the agent has its secret, setup and release need it as the token: nobody without the secret of the server moves
++ * the device to another server or removes the device owner. The secret is never returned.
 + */
 +public class SetupProvider extends ContentProvider {
 +
@@ -205,6 +220,16 @@ index 0000000..93adfda
 +        return true;
 +    }
 +
++    private void checkToken(Bundle extras) {
++        if (!Secret.isSet(getContext())) {
++            return;
++        }
++        String token = extras != null ? extras.getString("token") : null;
++        if (!Secret.matches(getContext(), token)) {
++            throw new SecurityException("the token (the secret of the server) is required");
++        }
++    }
++
 +    @Override
 +    public Bundle call(String method, String arg, Bundle extras) {
 +        int uid = Binder.getCallingUid();
@@ -213,22 +238,30 @@ index 0000000..93adfda
 +        }
 +        SettingsHelper settings = SettingsHelper.getInstance(getContext());
 +        if ("setup".equals(method)) {
++            checkToken(extras);
 +            String baseUrl = arg;
 +            String deviceId = extras != null ? extras.getString("deviceId") : null;
++            String secret = extras != null ? extras.getString("secret") : null;
 +            if (baseUrl == null || !(baseUrl.startsWith("https://") || baseUrl.startsWith("http://"))) {
 +                throw new IllegalArgumentException("baseUrl (http or https) is required");
 +            }
 +            if (deviceId == null || deviceId.trim().isEmpty()) {
 +                throw new IllegalArgumentException("deviceId is required");
 +            }
++            if (secret == null || secret.length() < 16) {
++                throw new IllegalArgumentException("secret (16+ characters) is required");
++            }
 +            settings.setBaseUrl(baseUrl);
 +            settings.setSecondaryBaseUrl(baseUrl);
 +            settings.setServerProject(extras.getString("serverProject", ""));
 +            settings.setDeviceId(deviceId.trim());
-+            String secret = extras.getString("secret");
-+            if (secret != null && !secret.isEmpty()) {
-+                Secret.save(getContext(), secret);
++            Secret.save(getContext(), secret);
++        } else if ("release".equals(method)) {
++            if (!Secret.isSet(getContext())) {
++                throw new SecurityException("the agent has no secret: it was never set up");
 +            }
++            checkToken(extras);
++            Release.run(getContext());
 +        } else if (!"status".equals(method)) {
 +            throw new IllegalArgumentException("unknown method: " + method);
 +        }

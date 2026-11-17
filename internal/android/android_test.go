@@ -147,8 +147,16 @@ func TestEnrollCreatesFarmConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(s.Configure, "--arg https://hmdm.example.com --extra deviceId:s:96JY1BL9Z --extra secret:s:0123456789abcdef") {
+	if !strings.Contains(s.Configure, "--arg https://hmdm.example.com --extra deviceId:s:96JY1BL9Z --extra secret:s:0123456789abcdef --extra token:s:0123456789abcdef") {
 		t.Errorf("setup command: %s", s.Configure)
+	}
+	if s.Release != "content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:0123456789abcdef" {
+		t.Errorf("release command: %s", s.Release)
+	}
+	for _, c := range s.ADB {
+		if strings.Contains(c, "install -t") {
+			t.Errorf("the agent is no test-only app: %s", c)
+		}
 	}
 	d := f.devices["96JY1BL9Z"]
 	cfg := f.configs[d.ConfigurationID]

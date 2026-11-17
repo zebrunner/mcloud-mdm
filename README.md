@@ -136,10 +136,10 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
 
 The agent is the launcher of Headwind MDM ([hmdm-android](https://github.com/h-mdm/hmdm-android), Apache-2.0) with `android/agent/hmdm-android.patch`:
 
-- `android:testOnly`: `adb shell dpm remove-active-admin com.hmdm.launcher/.AdminReceiver` removes the device owner, no factory reset (installed by `adb install -t`).
-- the setup over adb, without the screen: `content call --uri content://com.hmdm.launcher.mcloud --method setup --arg <server> --extra deviceId:s:<serial> --extra secret:s:<secret>`; only the uid of adb shell (or root) may call it.
-- the shared secret of the server comes with the setup: one APK for every farm.
-- the push `mcloudRelease`: the agent removes its device owner (the reset password token first, Android 12 fails otherwise).
+- the setup over adb, without the screen: `content call --uri content://com.hmdm.launcher.mcloud --method setup --arg <server> --extra deviceId:s:<serial> --extra secret:s:<secret> --extra token:s:<secret>`; only the uid of adb shell (or root) may call it.
+- the shared secret of the server comes with the setup: one APK for every farm. It is the token of the agent too: once set, `setup` and `release` need it. Every user of adb is the shell uid, the remote debug of MCloud too: without the secret nobody moves the device to another server or releases it.
+- the release: the push `mcloudRelease` (the admin UI) or `--method release --extra token:s:<secret>` over adb (`android/release.sh`); the agent removes its device owner (the reset password token first, Android 12 fails otherwise).
+- no `android:testOnly`, no backup: adb cannot remove the device owner (`dpm remove-active-admin`: "non-test admin"), uninstall the agent (`DELETE_FAILED_DEVICE_POLICY_MANAGER`), clear its data or disable it (checked on Android 12). Android keeps the test-only flag of the moment the device owner was set: `android/enroll.sh` sets the device owner of a test-only admin again.
 - no permission dialog of the agent; a crash on the first start without a configuration fixed.
 
 `make agent AGENT_KEYSTORE=<keystore> AGENT_KEYSTORE_PASSWORD=<password>` builds and signs `bin/mcloud-mdm-agent.apk` in Docker (linux/amd64). Keep the key: Android updates a device owner app signed with the same key only.
@@ -150,7 +150,7 @@ Every device gets its own configuration `mcloud-<serial>` (a copy of `Common - M
 MDM_URL=https://mcloud.example.com MDM_ENROLL_TOKEN=... android/enroll.sh <serial> [name]
 ```
 
-It downloads `/android/agent.apk`, takes the setup of `GET /android/enroll?serial=<serial>&format=shell` (the enrollment token; the JSON without `format` has the adb commands), installs the agent, sets the device owner, sets the agent up and starts it.
+It downloads `/android/agent.apk`, takes the setup of `GET /android/enroll?serial=<serial>&format=shell` (the enrollment token; the JSON without `format` has the adb commands), installs the agent, sets the device owner, sets the agent up and starts it. Without the server of the agent, `android/release.sh <serial> [--uninstall]` releases the device with the command of `GET /android/release` (the enrollment token). Lost both the server and its secret: only a factory reset removes the device owner; keep `HMDM_SHARED_SECRET` with the signing key of the agent.
 
 | Preset | Android | Checked on a Pixel 3 XL, Android 12 |
 | --- | --- | --- |

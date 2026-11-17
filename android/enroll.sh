@@ -1,6 +1,6 @@
 #!/bin/bash
 # Enrolls an Android device of this host into mcloud-mdm over adb (README.md#android): the agent becomes the device
-# owner without a factory reset and connects to Headwind MDM.
+# owner without a factory reset and connects to Headwind MDM. adb alone cannot remove it: android/release.sh does.
 #   MDM_URL=https://mcloud.example.com MDM_ENROLL_TOKEN=... android/enroll.sh <serial> [name]
 # CURL_OPTS adds options of curl (e.g. --cacert ca.crt), ADB the adb command (e.g. "adb -H host").
 set -euo pipefail
@@ -31,7 +31,13 @@ configure="$(curl -fsS "${curl_opts[@]}" -H "Authorization: Bearer ${MDM_ENROLL_
   "${MDM_URL%/}/android/enroll")"
 
 echo "enroll: installing the agent on ${serial}"
-adb_s install -t -r "$apk" > /dev/null
+adb_s install -r "$apk" > /dev/null
+# an agent made the device owner while it was a test-only app stays removable over adb (Android keeps the flag of
+# the moment): its device owner is set again
+if adb_s shell dumpsys device_policy | grep -q "testOnlyAdmin=true"; then
+  echo "enroll: the device owner is a test-only admin, setting it again"
+  adb_s shell dpm remove-active-admin "$admin" > /dev/null
+fi
 if adb_s shell dpm list-owners | grep -q "$admin"; then
   echo "enroll: the agent is the device owner already"
 else

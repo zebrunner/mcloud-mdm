@@ -142,7 +142,7 @@
     <h2>Android (Headwind MDM)</h2>
     <div class="muted" id="androidServer">loading...</div>
     <div class="hint">The agent (android/agent, make agent) is the device owner, installed over adb: no factory reset, released by
-      "Release the device" or <code>adb shell dpm remove-active-admin com.hmdm.launcher/.AdminReceiver</code>. It keeps the system
+      "Release the device" or <code>android/release.sh</code> on the host (it needs the secret of the server: adb alone cannot remove the agent). It keeps the system
       launcher, never grants permissions to the apps and installs nothing by itself; it always forbids safe mode (no_safe_boot). Every device has its own configuration
       mcloud-&lt;serial&gt; in Headwind MDM: its presets. A device with an account (Google) cannot get a device owner: remove the accounts first.</div>
     <div class="row">
