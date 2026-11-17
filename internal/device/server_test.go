@@ -120,6 +120,9 @@ func TestAndroidEndpoints(t *testing.T) {
 	if code, _ := get(t, srv.URL+"/android/enroll?serial=SER001", "0123456789abcdef"); code != http.StatusNotFound {
 		t.Errorf("no Headwind MDM: %d", code)
 	}
+	if code, _ := get(t, srv.URL+"/android/status?serial=SER001", "0123456789abcdef"); code != http.StatusNotFound {
+		t.Errorf("status without Headwind MDM: %d", code)
+	}
 	if code, _ := get(t, srv.URL+"/android/release", ""); code != http.StatusUnauthorized {
 		t.Errorf("release without the token: %d", code)
 	}
@@ -136,5 +139,68 @@ func TestAndroidEndpoints(t *testing.T) {
 	}
 	if code, body := get(t, srv.URL+"/android/agent.apk", ""); code != http.StatusOK || string(body) != "PK apk" {
 		t.Errorf("APK: %d %q", code, body)
+	}
+}
+
+type fakeCommander struct {
+	sent []string
+	args []map[string]any
+}
+
+func (f *fakeCommander) Send(udid, requestType string, args map[string]any) (string, error) {
+	f.sent = append(f.sent, udid+" "+requestType)
+	f.args = append(f.args, args)
+	return "CMD-1", nil
+}
+
+func post(t *testing.T, url, token string) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
+}
+
+func TestIOSStatusAndRelease(t *testing.T) {
+	s, srv := server(t)
+	defer srv.Close()
+	cmds := &fakeCommander{}
+	s.Commands = cmds
+	const token, udid = "0123456789abcdef", "00008020-0005308201DA002E"
+	if code, _ := get(t, srv.URL+"/mdm/status?udid="+udid, ""); code != http.StatusUnauthorized {
+		t.Errorf("no token: %d", code)
+	}
+	if code, _ := get(t, srv.URL+"/mdm/status?udid=x;y", token); code != http.StatusBadRequest {
+		t.Errorf("bad udid: %d", code)
+	}
+	code, body := get(t, srv.URL+"/mdm/status?udid="+udid+"&format=shell", token)
+	if code != http.StatusOK || string(body) != "udid="+udid+"\nknown=no\nenrolled=no\n" {
+		t.Errorf("unknown device: %d %q", code, body)
+	}
+	if code, _ := post(t, srv.URL+"/mdm/release?udid="+udid, token); code != http.StatusConflict || len(cmds.sent) != 0 {
+		t.Errorf("release of a device that is not enrolled: %d %v", code, cmds.sent)
+	}
+	if err := s.State.Authenticate(udid, "F71X", "iPhone11,8", "18.7.11"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.State.TokenUpdate(udid, nil); err != nil {
+		t.Fatal(err)
+	}
+	code, body = get(t, srv.URL+"/mdm/status?udid="+udid, token)
+	if code != http.StatusOK || !strings.Contains(string(body), `"enrolled":"yes"`) || !strings.Contains(string(body), `"product":"iPhone11,8"`) {
+		t.Errorf("enrolled device: %d %s", code, body)
+	}
+	code, body = post(t, srv.URL+"/mdm/release?udid="+udid+"&format=shell", token)
+	if code != http.StatusAccepted || !strings.Contains(string(body), "command=CMD-1") ||
+		len(cmds.sent) != 1 || cmds.sent[0] != udid+" RemoveProfile" || cmds.args[0]["Identifier"] != "com.example.mdm" {
+		t.Errorf("release: %d %q %v %v", code, body, cmds.sent, cmds.args)
+	}
+	if code, _ := get(t, srv.URL+"/mdm/release?udid="+udid, token); code != http.StatusMethodNotAllowed {
+		t.Errorf("release by GET: %d", code)
 	}
 }

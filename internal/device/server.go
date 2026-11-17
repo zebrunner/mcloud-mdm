@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/zebrunner/mcloud-mdm/internal/android"
@@ -32,7 +33,14 @@ type Server struct {
 	Log    *slog.Logger
 	// Android is nil without Headwind MDM
 	Android *android.Manager
-	tlsCA   []byte
+	// Commands sends the MDM commands of the nodes (the release of an iOS device): the admin server
+	Commands Commander
+	tlsCA    []byte
+}
+
+// Commander enqueues an MDM command for a device (NanoHUB pushes it) and returns its uuid.
+type Commander interface {
+	Send(udid, requestType string, args map[string]any) (string, error)
 }
 
 // New returns the server; the DER of MDM_TLS_CA_FILE is read once.
@@ -52,11 +60,15 @@ func New(c *config.Config, s *scep.Server, st *state.Store, log *slog.Logger) (*
 	return srv, nil
 }
 
-// Handler routes /scep, /mdm/enroll, /android/enroll, /android/release, /android/agent.apk and /healthz.
+// Handler routes the devices (/scep, /android/agent.apk), the nodes (/mdm/enroll, /mdm/status, /mdm/release,
+// /android/enroll, /android/status, /android/release: the enrollment token) and /healthz.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/scep", s.SCEP)
 	mux.HandleFunc("GET /mdm/enroll", s.enroll)
+	mux.HandleFunc("GET /mdm/status", s.iosStatus)
+	mux.HandleFunc("POST /mdm/release", s.iosRelease)
+	mux.HandleFunc("GET /android/status", s.androidStatus)
 	mux.HandleFunc("GET /android/enroll", s.androidEnroll)
 	mux.HandleFunc("GET /android/release", s.androidRelease)
 	mux.HandleFunc("GET /android/agent.apk", s.agentAPK)
@@ -181,4 +193,111 @@ func (s *Server) agentAPK(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
 	http.ServeContent(w, r, "mcloud-mdm-agent.apk", info.ModTime(), f)
+}
+
+// answer writes the answer of a node: JSON, or key=value lines with ?format=shell (the scripts of the nodes)
+func answer(w http.ResponseWriter, r *http.Request, code int, fields [][2]string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Query().Get("format") == "shell" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(code)
+		for _, f := range fields {
+			_, _ = fmt.Fprintf(w, "%s=%s\n", f[0], strings.NewReplacer("\n", " ", "\r", " ").Replace(f[1]))
+		}
+		return
+	}
+	out := map[string]string{}
+	for _, f := range fields {
+		out[f[0]] = f[1]
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// iosStatus: what the webhook saw of the device, the device is not touched
+func (s *Server) iosStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(w, r) {
+		return
+	}
+	udid := r.URL.Query().Get("udid")
+	if !udidPattern.MatchString(udid) {
+		http.Error(w, "invalid udid", http.StatusBadRequest)
+		return
+	}
+	d, known := s.State.Device(udid)
+	fields := [][2]string{{"udid", udid}, {"known", yesNo(known)}, {"enrolled", yesNo(s.State.Enrolled(udid))}}
+	if known {
+		fields = append(fields, [2]string{"checked_out", yesNo(d.CheckedOut)}, [2]string{"enrolled_at", d.EnrolledAt},
+			[2]string{"last_seen_at", d.LastSeenAt}, [2]string{"product", d.Product}, [2]string{"os_version", d.OSVersion},
+			[2]string{"serial", d.Serial}, [2]string{"unlock_token", yesNo(d.HasUnlock)})
+	}
+	answer(w, r, http.StatusOK, fields)
+}
+
+// iosRelease removes the enrollment profile by MDM (RemoveProfile): the device leaves MDM with every profile MDM
+// installed; a supervised device stays supervised
+func (s *Server) iosRelease(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(w, r) {
+		return
+	}
+	udid := r.URL.Query().Get("udid")
+	if !udidPattern.MatchString(udid) {
+		http.Error(w, "invalid udid", http.StatusBadRequest)
+		return
+	}
+	if s.Commands == nil || !s.State.Enrolled(udid) {
+		answer(w, r, http.StatusConflict, [][2]string{{"udid", udid}, {"error", "not an enrolled device"}})
+		return
+	}
+	id, err := s.Commands.Send(udid, "RemoveProfile", map[string]any{"Identifier": s.Config.ProfileID})
+	if err != nil {
+		s.Log.Error("ios release failed", "udid", udid, "err", err)
+		answer(w, r, http.StatusBadGateway, [][2]string{{"udid", udid}, {"error", err.Error()}})
+		return
+	}
+	s.Log.Info("ios release sent", "udid", udid, "command", id, "remote", r.RemoteAddr)
+	answer(w, r, http.StatusAccepted, [][2]string{{"udid", udid}, {"command", id}})
+}
+
+// androidStatus: what Headwind MDM knows of the device, the device is not touched
+func (s *Server) androidStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(w, r) {
+		return
+	}
+	if s.Android == nil {
+		http.Error(w, "no Android: HMDM_URL is not set", http.StatusNotFound)
+		return
+	}
+	serial := r.URL.Query().Get("serial")
+	if !android.ValidSerial(serial) {
+		http.Error(w, "invalid serial", http.StatusBadRequest)
+		return
+	}
+	d, err := s.Android.Device(serial)
+	if err != nil {
+		answer(w, r, http.StatusBadGateway, [][2]string{{"serial", serial}, {"error", err.Error()}})
+		return
+	}
+	fields := [][2]string{{"serial", serial}, {"known", yesNo(d != nil)}}
+	if d != nil {
+		var presets []string
+		for name, on := range d.Presets {
+			if on {
+				presets = append(presets, name)
+			}
+		}
+		sort.Strings(presets)
+		fields = append(fields, [2]string{"device_owner", yesNo(d.Owner)}, [2]string{"last_sync_at", d.LastSyncAt},
+			[2]string{"agent_version", d.Agent}, [2]string{"model", d.Model}, [2]string{"os_version", d.OSVersion},
+			[2]string{"managed", yesNo(!d.Unmanaged)}, [2]string{"presets", strings.Join(presets, ",")})
+	}
+	answer(w, r, http.StatusOK, fields)
 }

@@ -208,6 +208,12 @@ func TestPresets(t *testing.T) {
 	if err != nil || len(devices) != 1 || !devices[0].Presets["bluetooth-off"] || devices[0].Presets["wifi-locked"] || !devices[0].Pending {
 		t.Errorf("devices: %+v %v", devices, err)
 	}
+	if d, err := m.Device("SER001"); err != nil || d == nil || !d.Presets["erase-off"] {
+		t.Errorf("device: %+v %v", d, err)
+	}
+	if d, err := m.Device("NOPE01"); err != nil || d != nil {
+		t.Errorf("unknown device: %+v %v", d, err)
+	}
 	if err := m.SetPreset("SER001", "bluetooth-off", false); err != nil {
 		t.Fatal(err)
 	}

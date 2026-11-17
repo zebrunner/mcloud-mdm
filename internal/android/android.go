@@ -275,6 +275,20 @@ type Device struct {
 	Restriction string          `json:"restrictions,omitempty"`
 }
 
+// Device is the device of the serial, nil when Headwind MDM does not know it.
+func (m *Manager) Device(serial string) (*Device, error) {
+	list, err := m.Devices()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Serial == serial {
+			return &list[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // Devices are the devices of Headwind MDM with the presets of their configurations.
 func (m *Manager) Devices() ([]Device, error) {
 	devices, err := m.HW.Devices()

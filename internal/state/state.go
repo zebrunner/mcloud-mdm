@@ -255,6 +255,19 @@ func (s *Store) Enrolled(udid string) bool {
 	return ok && d.EnrolledAt != "" && !d.CheckedOut
 }
 
+// Device returns a copy of the device of the udid, false when the webhook never saw it.
+func (s *Store) Device(udid string) (Device, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.data.Devices[udid]
+	if !ok {
+		return Device{}, false
+	}
+	c := *d
+	c.HasUnlock = len(s.data.UnlockTokens[udid]) > 0
+	return c, true
+}
+
 // Status of a command, "" when unknown.
 func (s *Store) Status(uuid string) string {
 	s.mu.Lock()

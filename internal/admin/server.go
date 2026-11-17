@@ -160,6 +160,23 @@ func (s *Server) stateView(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// Send enqueues an MDM command for the device and returns its uuid (the release of the device listener uses it).
+func (s *Server) Send(udid, requestType string, args map[string]any) (string, error) {
+	return s.send(udid, requestType, args)
+}
+
+// Push sends an APNs push to the device: it connects and takes its queue.
+func (s *Server) Push(udid string) error {
+	status, body, err := s.NanoHUB.Push(udid)
+	if err != nil {
+		return err
+	}
+	if status/100 != 2 {
+		return fmt.Errorf("NanoHUB: %d %s", status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 // send enqueues a command of the UI; ClearPasscode gets the unlock token of the device
 func (s *Server) send(udid, requestType string, args map[string]any) (string, error) {
 	if !s.State.Enrolled(udid) {

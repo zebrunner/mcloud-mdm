@@ -102,6 +102,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	}
 	adm := &admin.Server{Config: cfg, NanoHUB: nanohub.New(cfg.NanoHUBURL, cfg.NanoHUBKey), State: st,
 		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second}
+	dev.Commands = adm
 	if cfg.HeadwindURL != "" {
 		mgr := &android.Manager{HW: headwind.New(cfg.HeadwindURL, cfg.HeadwindLogin, cfg.HeadwindPassword),
 			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret, MQTTPort: cfg.HeadwindMQTTPort}

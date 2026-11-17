@@ -222,7 +222,19 @@ MCloud (zebrunner/mcloud):
 - stf-proxy: the locations of `proxy.conf` (the addresses of the site and `MDM_ENROLL_TOKEN` rendered by the setup), its stream server on 31443 with the certificate of stf-proxy (`configuration/stf-proxy/ssl`), port 31443 published; a farm whose TLS ends before stf-proxy (a load balancer) terminates 31443 there too;
 - the admin UI on `127.0.0.1:${MDM_ADMIN_PORT}` (9101) of the server only, by default: an ssh tunnel (`ssh -L 9101:127.0.0.1:9101 <server>`, then `http://127.0.0.1:9101`); optionally (`MDM_ADMIN_PUBLIC=true`) `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF) with `Host: $http_host` (the UI compares it with the Origin of its POSTs).
 
-mcloud-agent (zebrunner/mcloud-agent): `zebrunner-farm mdm <enroll|release|status> <udid>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. The commands run in the connector of the device (`docker exec device-<name>-<udid>-connector`):
+The API of the nodes (the device listener, `Authorization: Bearer <MDM_ENROLL_TOKEN>` injected by stf-proxy; `format=shell` answers `key=value` lines instead of JSON):
+
+| Request | Answer |
+| --- | --- |
+| `GET /mdm/enroll?udid=<udid>` | the enrollment profile of an iOS device (a one-time SCEP challenge) |
+| `GET /mdm/status?udid=<udid>` | `known`, `enrolled`, `checked_out`, `enrolled_at`, `last_seen_at`, `product`, `os_version`, `serial`, `unlock_token`: the webhook, the device is not touched |
+| `POST /mdm/release?udid=<udid>` | 202 `command=<uuid>`: `RemoveProfile` of the enrollment profile, the device leaves MDM with every MDM profile (it stays supervised); 409 for a device that is not enrolled |
+| `GET /android/agent.apk` | the agent |
+| `GET /android/enroll?serial=<serial>[&name=<name>]` | the setup of the agent (`format=shell`: its `adb shell` command) |
+| `GET /android/status?serial=<serial>` | `known`, `device_owner`, `last_sync_at`, `agent_version`, `model`, `os_version`, `managed`, `presets`: Headwind MDM, the device is not touched |
+| `GET /android/release` | the `adb shell` command of the release without the server |
+
+mcloud-agent (zebrunner/mcloud-agent): `zebrunner-farm mdm <enroll|release|status> <udid>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. `status` asks the server only. `enroll` and `release` take the lock of the device, stop its containers (if it has any: a new device has none yet), run a one-shot container of the image of its connector (`docker run --rm --entrypoint ...` with the USB device and the volumes of the connector: `mcloud-key-volume` of adb, `<device>-lockdown` of the pairing), then start its containers again:
 
 - Android (adb): `GET /android/agent.apk` into the connector, `GET /android/enroll?serial=<udid>&name=<name>&format=shell` (the `adb shell` command of the setup), `adb install -r`, `dpm set-device-owner com.hmdm.launcher/.AdminReceiver`, the setup, `am start`; the release: `GET /android/release` (its `adb shell` command). `android/enroll.sh` and `android/release.sh` are the reference.
 - iOS (go-ios, `/var/lib/lockdown` of the connector): `GET /mdm/enroll?udid=<udid>` (a profile with a one-time challenge), `ios profile add --p12file=<supervision identity>`; `ios pair --p12file` after a lost pairing; `ios devmode enable`.
