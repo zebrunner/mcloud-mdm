@@ -108,7 +108,7 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of the Android agents: their configurations, the MQTT push and the device info. It serves plain http and MQTT inside; the proxy terminates TLS (`proxy.conf`): https under `/hmdm` of the domain of the farm (`HMDM_PUBLIC_URL`, the proxy strips the prefix) and MQTT over TLS on the same host (`HMDM_MQTT_PORT`, 31443 -> 31000). No DNS name or certificate of its own.
 
 - `android/hmdm-entrypoint.sh` (the entrypoint of `hmdm`) writes the context of the web application at every start: `base.url` is `HMDM_PUBLIC_URL`, `secure.enrollment=1` (the agents sign their requests with `SHARED_SECRET`: nobody else enrolls or reads a configuration, checked: an unsigned request is refused).
-- `android/hmdm-init.sh` (a one-shot service on the `postgres` image) sets `HMDM_PASSWORD` (Headwind MDM asks for a new password at its first start) and points the URLs of the files of the applications to `HMDM_PUBLIC_URL`.
+- `android/hmdm-init.sh` (a one-shot service on the `postgres` image) sets `HMDM_PASSWORD` (Headwind MDM asks for a new password at its first start) and points the URLs of the files of the applications to `HMDM_PUBLIC_URL`; with `HMDM_INTERNAL_URL` it waits for the web application first (the init.sql of the first start would bring the reset back) and applies it again for a minute.
 - The web panel and the API of the admins are never published: mcloud-mdm reaches them inside, the panel is for `ssh -L` only. Tomcat logs "Error creating SSLContext" of its unused 8443 connector: harmless.
 
 ```yaml
@@ -138,6 +138,7 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
       PGDATABASE: hmdm
       HMDM_PASSWORD: ${HMDM_PASSWORD}
       HMDM_PUBLIC_URL: https://demo.zebrunner.farm/hmdm
+      HMDM_INTERNAL_URL: http://hmdm:8080
     volumes:
       - ./android/hmdm-init.sh:/hmdm-init.sh:ro
     restart: "no"
