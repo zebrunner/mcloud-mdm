@@ -161,7 +161,46 @@ It downloads `/android/agent.apk`, takes the setup of `GET /android/enroll?seria
 | `accounts-off` | `no_modify_accounts` | |
 | `users-off` | `no_add_user` | |
 
-The commands are push messages: sync, reboot, run an app, clear the data of an app, uninstall an app and release. The agent always sets `no_safe_boot`. `no_debugging_features`, `no_install_apps` and `no_uninstall_apps` are never offered: they break adb.
+The agent always sets `no_safe_boot`. `no_debugging_features`, `no_install_apps` and `no_uninstall_apps` are never offered: they break adb.
+
+The commands are push messages (MQTT); the agent writes what it did into the device log of Headwind MDM, the admin UI shows it and marks a command delivered by its "Got Push Message". Checked on a Pixel 3 XL, Android 12:
+
+| Command | Push | Result |
+| --- | --- | --- |
+| Sync the configuration | `configUpdated` | the configuration and the device info |
+| Reboot | `reboot` | rebooted, the agent connects again by itself |
+| Run a shell command | `runCommand` | `sh -c` as the app of the agent (not the adb shell), the output (3000 characters) in the log |
+| Run an app | `runApp` | the launcher activity, optional action, data, extras |
+| Clear the data of an app | `clearAppData` | `clearApplicationUserData`, "cleared" in the log |
+| Uninstall an app | `uninstallApp` | silent; the agent itself is refused |
+| Grant the runtime permissions | `grantPermissions` | `grant`: granted and fixed by the policy; `default`: back to the user (patched: the farm configuration would only reset them) |
+| Open a screen | `intent` | an activity by its action, e.g. `android.settings.WIFI_SETTINGS` |
+| Send a broadcast | `broadcast` | action, package, data, extras |
+| Delete a file, a directory; empty a directory | `deleteFile`, `deleteDir`, `purgeDir` | the shared storage (`/sdcard/<path>`), no `..`, never the root |
+| Clear the downloads of the agent | `clearDownloadHistory` | |
+| Exit the kiosk, permissive mode | `exitKiosk`, `permissiveMode` | no effect: the farm configuration has no kiosk |
+| Open the admin screen of the agent | `adminPanel` | opens WITHOUT the password: whoever sees the screen can change the server and clear the restrictions |
+| Release the device | `mcloudRelease` | the device owner removed |
+| Any push message | any type | a JSON payload; `mcloudRelease` only by Release |
+
+The history of the commands is kept in memory (the last 300). The agent also starts its services at every start of its process (the patch: a watchdog): `BOOT_COMPLETED` did not reach it once after a reboot on Android 12, and the system launcher of a farm device never starts it.
+
+## Infrastructure
+
+Next to every MCloud (one MDM per farm, Apple Business is the other way in):
+
+| Part | iOS | Android |
+| --- | --- | --- |
+| containers | NanoHUB + MySQL 8.4 | Headwind MDM (amd64, Tomcat, about 1 GB of RAM) + PostgreSQL + `hmdm-init` |
+| shared | mcloud-mdm (SCEP, the enrollment, the admin UI) | mcloud-mdm (the enrollment, the agent APK, the admin UI) |
+| the proxy of MCloud publishes | `/mdm`, `/checkin` (NanoHUB), `/scep`, `/mdm/enroll` (mcloud-mdm) | `/android/` (mcloud-mdm); Headwind MDM on a host of its own (`HMDM_PUBLIC_URL`, the WAR is the root) |
+| from the devices | https to the public URL (a certificate the device trusts, or `MDM_TLS_CA_FILE`) | http(s) to `HMDM_PUBLIC_URL` and TCP 31000 (MQTT) |
+| outbound | APNs: `api.push.apple.com` 443 | none (no Google services) |
+| secrets | the APNs push certificate (renewed every year with the same Apple ID), the supervision identity, `MDM_ENROLL_TOKEN` | the signing key of the agent, `HMDM_SHARED_SECRET` (the token of the agents), `HMDM_PASSWORD` |
+| on the device host | go-ios: supervision, the profile, `ios pair`, Developer Mode | adb: `android/enroll.sh`, `android/release.sh` |
+| the device | supervised (`ios prepare`, it erases) once | no account, a single user; no factory reset |
+
+The admin listener `:8081` is published only behind the authentication of MCloud.
 
 ## Admin UI
 
@@ -171,7 +210,7 @@ The commands are push messages: sync, reboot, run an app, clear the data of an a
 - The ready profiles, installed by `InstallProfile` and removed by `RemoveProfile`, their "installed" marks from `ProfileList`.
 - The console of the API of NanoHUB with the DDM declarations (configurations, activations, sets, status) and NanoCMD.
 - The upload of the APNs push certificate and its key.
-- Android: the devices of Headwind MDM with their presets (applied at the next sync of the agent), the push commands, the enrollment commands of a serial.
+- Two tabs, iOS and Android (`#ios`, `#android` in the URL). Android: the devices of Headwind MDM, every push command with its arguments and hints, the presets of the selected device, the commands sent with their delivery, the device log, the enrollment commands of a serial.
 
 ## Ready profiles
 

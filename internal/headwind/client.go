@@ -129,7 +129,12 @@ func (c *Client) call(method, path string, in, out any) error {
 		token := c.token
 		c.mu.Unlock()
 
-		req, err := http.NewRequest(method, c.URL+"/rest/private"+path, bytes.NewReader(payload))
+		// the plugins have their own paths: /rest/plugins/<plugin>/...
+		target := c.URL + "/rest/private" + path
+		if strings.HasPrefix(path, "/rest/") {
+			target = c.URL + path
+		}
+		req, err := http.NewRequest(method, target, bytes.NewReader(payload))
 		if err != nil {
 			return err
 		}
@@ -288,4 +293,30 @@ func (c *Client) Push(number, messageType, payload string) error {
 func (c *Client) Ping() error {
 	_, err := c.Configurations()
 	return err
+}
+
+// LogRecord is a record of the device log the agent uploads (the plugin devicelog).
+type LogRecord struct {
+	CreateTime int64  `json:"createTime"`
+	Severity   string `json:"severity"`
+	Message    string `json:"message"`
+	Number     string `json:"deviceNumber"`
+	Package    string `json:"applicationPkg"`
+}
+
+// DeviceLog is the newest records of the log of the device, the newest first.
+func (c *Client) DeviceLog(number string, limit int) ([]LogRecord, error) {
+	var r struct {
+		Items []LogRecord `json:"items"`
+	}
+	err := c.call(http.MethodPost, "/rest/plugins/devicelog/log/private/search",
+		map[string]any{"pageSize": limit, "pageNum": 1, "deviceFilter": number}, &r)
+	out := []LogRecord{}
+	// the filter of Headwind MDM matches a part of the number
+	for _, rec := range r.Items {
+		if rec.Number == number {
+			out = append(out, rec)
+		}
+	}
+	return out, err
 }

@@ -92,36 +92,6 @@ func preset(name string) *Preset {
 	return nil
 }
 
-// Command is a push message of the admin UI.
-type Command struct {
-	Name  string `json:"name"`
-	Title string `json:"title"`
-	Hint  string `json:"hint"`
-	// Push is the message type of the agent; Package marks the commands with a package name argument
-	Push    string `json:"-"`
-	Package bool   `json:"package"`
-	Danger  bool   `json:"danger,omitempty"`
-}
-
-// Commands of the Android devices.
-var Commands = []*Command{
-	{Name: "sync", Title: "Sync the configuration", Push: "configUpdated",
-		Hint: "The agent loads its configuration now and reports the device info: the presets apply."},
-	{Name: "reboot", Title: "Reboot", Push: "reboot", Danger: true,
-		Hint: "DevicePolicyManager.reboot: the device restarts, adb and the session of MCloud drop for a minute."},
-	{Name: "run-app", Title: "Run an app", Push: "runApp", Package: true,
-		Hint: "Starts the launcher activity of the package, e.g. com.android.settings."},
-	{Name: "clear-app-data", Title: "Clear the data of an app", Push: "clearAppData", Package: true, Danger: true,
-		Hint: "DevicePolicyManager.clearApplicationUserData (Android 9+): like pm clear, without adb."},
-	{Name: "uninstall-app", Title: "Uninstall an app", Push: "uninstallApp", Package: true, Danger: true,
-		Hint: "Silent uninstall by the device owner."},
-	{Name: "release", Title: "Release the device (remove MDM)", Push: releasePush, Danger: true,
-		Hint: "The agent gives up the device owner: every restriction goes away, no factory reset. The agent stays " +
-			"as a regular app (adb uninstall " + AgentPackage + "); Delete removes the device from the server. " +
-			"Without the server: android/release.sh on the host of the device (the secret of the server is the token). " +
-			"adb alone cannot remove the device owner."},
-}
-
 // Manager is the Android part of mcloud-mdm.
 type Manager struct {
 	HW *headwind.Client
@@ -133,6 +103,8 @@ type Manager struct {
 	mu sync.Mutex
 	// changed is the time of the last preset change of a device: applied once the device synchronized after it
 	changed map[string]time.Time
+	// history is the last commands sent, the newest first (memory only: the device log has the results)
+	history []Sent
 }
 
 // Setup is what a device host needs to enroll a device over adb. The secret is the token of the agent too: whoever
@@ -404,38 +376,6 @@ func (m *Manager) SetPreset(serial, name string, on bool) error {
 	m.changed[serial] = m.now()
 	m.mu.Unlock()
 	return nil
-}
-
-// Send sends the command to the agent of the device.
-func (m *Manager) Send(serial, name, pkg string) error {
-	var c *Command
-	for _, x := range Commands {
-		if x.Name == name {
-			c = x
-		}
-	}
-	if c == nil {
-		return fmt.Errorf("no command %q", name)
-	}
-	payload := ""
-	if c.Package {
-		if !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$`).MatchString(pkg) {
-			return fmt.Errorf("invalid package %q", pkg)
-		}
-		if pkg == AgentPackage {
-			return errors.New("the agent itself: use Release")
-		}
-		data, _ := json.Marshal(map[string]string{"pkg": pkg})
-		payload = string(data)
-	}
-	dev, err := m.HW.Device(serial)
-	if err != nil {
-		return err
-	}
-	if dev == nil {
-		return fmt.Errorf("%s is not an Android device of the server", serial)
-	}
-	return m.HW.Push(serial, c.Push, payload)
 }
 
 // Delete removes the device and its configuration from the server; release the device first.

@@ -223,20 +223,26 @@ func TestCommandsAndDelete(t *testing.T) {
 	if _, err := m.Enroll("SER001", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Send("SER001", "run-app", "com.android.settings"); err != nil {
+	if err := m.Send("SER001", "run-app", map[string]string{"pkg": "com.android.settings"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Send("SER001", "release", ""); err != nil {
+	if err := m.Send("SER001", "release", nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.pushes) != 2 || f.pushes[0]["messageType"] != "runApp" || f.pushes[0]["payload"] != `{"pkg":"com.android.settings"}` ||
 		f.pushes[1]["messageType"] != "mcloudRelease" || f.pushes[1]["payload"] != nil {
 		t.Errorf("pushes: %v", f.pushes)
 	}
+	if h := m.History(); len(h) != 2 || h[0].Name != "release" || h[1].Payload != `{"pkg":"com.android.settings"}` {
+		t.Errorf("history: %+v", h)
+	}
 	for _, pkg := range []string{"", "settings", "com.x;reboot", AgentPackage} {
-		if err := m.Send("SER001", "clear-app-data", pkg); err == nil {
+		if err := m.Send("SER001", "clear-app-data", map[string]string{"pkg": pkg}); err == nil {
 			t.Errorf("package %q accepted", pkg)
 		}
+	}
+	if err := m.Send("SER002", "reboot", nil); err == nil {
+		t.Error("an unknown device is accepted")
 	}
 	if err := m.Delete("SER001"); err != nil {
 		t.Fatal(err)
@@ -252,5 +258,55 @@ func TestLoginRefused(t *testing.T) {
 	defer srv.Close()
 	if err := headwind.New(srv.URL, "admin", "wrong").Ping(); err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Errorf("wrong password: %v", err)
+	}
+}
+
+func TestPayloads(t *testing.T) {
+	cases := []struct {
+		name, push, payload string
+		args                map[string]string
+	}{
+		{"sync", "configUpdated", "", nil},
+		{"run-command", "runCommand", `{"command":"id"}`, map[string]string{"command": "id"}},
+		{"run-app", "runApp", `{"data":"https://x.example","extra":{"n":1},"pkg":"com.android.chrome"}`,
+			map[string]string{"pkg": "com.android.chrome", "data": "https://x.example", "extra": `{"n": 1}`}},
+		{"grant-permissions", "grantPermissions", `{"mode":"default","pkg":["com.a.b","com.c.d"]}`,
+			map[string]string{"pkg": "com.a.b, com.c.d", "mode": "default"}},
+		{"intent", "intent", `{"action":"android.settings.WIFI_SETTINGS"}`, map[string]string{"action": "android.settings.WIFI_SETTINGS"}},
+		{"purge-dir", "purgeDir", `{"path":"Download","recursive":"1"}`, map[string]string{"path": "/Download/", "recursive": "1"}},
+		{"purge-dir", "purgeDir", `{"path":"Download"}`, map[string]string{"path": "Download", "recursive": ""}},
+		{"raw", "myPlugin", `{"a":"b"}`, map[string]string{"type": "myPlugin", "payload": `{"a":"b"}`}},
+		{"raw", "reboot", "", map[string]string{"type": "reboot"}},
+	}
+	for _, tc := range cases {
+		push, payload, err := command(tc.name).payload(tc.args)
+		if err != nil || push != tc.push || payload != tc.payload {
+			t.Errorf("%s %v: %q %q %v", tc.name, tc.args, push, payload, err)
+		}
+	}
+	bad := []struct {
+		name string
+		args map[string]string
+	}{
+		{"run-command", nil},
+		{"delete-dir", map[string]string{"path": "/"}},
+		{"delete-dir", map[string]string{"path": "Download/../.."}},
+		{"intent", map[string]string{"action": "a b"}},
+		{"run-app", map[string]string{"pkg": "com.a.b", "extra": "[1]"}},
+		{"grant-permissions", map[string]string{"pkg": "com.a.b", "mode": "deny"}},
+		{"grant-permissions", map[string]string{"pkg": " , "}},
+		{"uninstall-app", map[string]string{"pkg": AgentPackage}},
+		{"raw", map[string]string{"type": "mcloudRelease"}},
+		{"raw", map[string]string{"type": "a b"}},
+	}
+	for _, tc := range bad {
+		if _, _, err := command(tc.name).payload(tc.args); err == nil {
+			t.Errorf("%s %v accepted", tc.name, tc.args)
+		}
+	}
+	for _, c := range Commands {
+		if c.Group == "" || c.Hint == "" || (c.Push == "" && c.Name != "raw") {
+			t.Errorf("incomplete command %+v", c)
+		}
 	}
 }

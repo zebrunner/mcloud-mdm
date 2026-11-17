@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/android/preset", s.browser(s.androidPreset))
 	mux.HandleFunc("POST /api/android/command", s.browser(s.androidCommand))
 	mux.HandleFunc("POST /api/android/delete", s.browser(s.androidDelete))
+	mux.HandleFunc("GET /api/android/log", s.androidLog)
 	mux.HandleFunc("POST /webhook", s.webhook)
 	return mux
 }
