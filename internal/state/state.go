@@ -6,8 +6,12 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,7 +45,9 @@ type Event struct {
 
 // Device is an enrollment seen by the webhook.
 type Device struct {
-	UDID       string `json:"udid"`
+	UDID string `json:"udid"`
+	// Name is the name of the device on its host (the agent sends it with the enrollment profile request)
+	Name       string `json:"name,omitempty"`
 	Serial     string `json:"serial,omitempty"`
 	Product    string `json:"product,omitempty"`
 	OSVersion  string `json:"os_version,omitempty"`
@@ -61,7 +67,35 @@ type Data struct {
 	PushNotAfter string             `json:"push_not_after,omitempty"`
 	// the unlock tokens of the devices (ClearPasscode), never shown by the API
 	UnlockTokens map[string][]byte `json:"unlock_tokens,omitempty"`
+	// Sets are the saved sets of settings of the admin UI
+	Sets []*Set `json:"sets,omitempty"`
+	// Names are the names of the devices on their hosts, also of the devices not enrolled yet
+	Names map[string]string `json:"names,omitempty"`
 }
+
+// Action is a step of a set of settings or of a job: a preset on or off, or a command.
+type Action struct {
+	// Kind: preset, command or push (iOS: an APNs push only)
+	Kind string `json:"kind"`
+	// Name: the preset, the request type of iOS (or its entry of the catalog), the command of Android
+	Name string `json:"name,omitempty"`
+	On   bool   `json:"on,omitempty"`
+	// Params: the parameters of an iOS preset, the arguments of an Android command
+	Params map[string]string `json:"params,omitempty"`
+	// Args: the arguments of an iOS command
+	Args map[string]any `json:"args,omitempty"`
+}
+
+// Set is a named list of actions of one platform (ios, android).
+type Set struct {
+	Name      string   `json:"name"`
+	Platform  string   `json:"platform"`
+	Actions   []Action `json:"actions"`
+	UpdatedAt string   `json:"updated_at,omitempty"`
+}
+
+// Secret parameters are never stored in a set: the UI asks for them when it applies the set
+var secretParams = []string{"password"}
 
 // Store is the state with its file.
 type Store struct {
@@ -88,6 +122,19 @@ func Open(dir string) (*Store, error) {
 	}
 	if s.data.UnlockTokens == nil {
 		s.data.UnlockTokens = map[string][]byte{}
+	}
+	if s.data.Names == nil {
+		s.data.Names = map[string]string{}
+	}
+	// a device of a name only (an enrollment profile request, no enrollment): its name only
+	for udid, d := range s.data.Devices {
+		if d.Name != "" {
+			s.data.Names[udid] = d.Name
+			d.Name = ""
+		}
+		if d.ChangedAt == "" && d.EnrolledAt == "" && d.LastSeenAt == "" {
+			delete(s.data.Devices, udid)
+		}
 	}
 	return s, nil
 }
@@ -264,8 +311,16 @@ func (s *Store) Device(udid string) (Device, bool) {
 		return Device{}, false
 	}
 	c := *d
+	c.Name = s.data.Names[udid]
 	c.HasUnlock = len(s.data.UnlockTokens[udid]) > 0
 	return c, true
+}
+
+// Name is the name of the device on its host, empty when it is not known.
+func (s *Store) Name(udid string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data.Names[udid]
 }
 
 // Status of a command, "" when unknown.
@@ -302,8 +357,89 @@ func (s *Store) View() View {
 	}
 	for _, d := range s.data.Devices {
 		c := *d
+		c.Name = s.data.Names[d.UDID]
 		c.HasUnlock = len(s.data.UnlockTokens[d.UDID]) > 0
 		v.Devices = append(v.Devices, c)
 	}
 	return v
+}
+
+// SetName records the name of the device on its host.
+func (s *Store) SetName(udid, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Names[udid] == name {
+		return nil
+	}
+	s.data.Names[udid] = name
+	return s.save()
+}
+
+// Sets returns a copy of the saved sets, sorted by platform and name.
+func (s *Store) Sets() []Set {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Set, 0, len(s.data.Sets))
+	for _, set := range s.data.Sets {
+		out = append(out, *set)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Platform != out[j].Platform {
+			return out[i].Platform < out[j].Platform
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// SaveSet adds the set or replaces the one of the same platform and name; the secret parameters are dropped.
+func (s *Store) SaveSet(set Set) error {
+	set.Name = strings.TrimSpace(set.Name)
+	if set.Name == "" || len(set.Name) > 80 {
+		return errors.New("the name of the set is required (80 characters at most)")
+	}
+	if set.Platform != "ios" && set.Platform != "android" {
+		return errors.New("the platform of the set: ios or android")
+	}
+	if len(set.Actions) == 0 {
+		return errors.New("the set has no action")
+	}
+	actions := make([]Action, 0, len(set.Actions))
+	for _, a := range set.Actions {
+		if len(a.Params) > 0 {
+			params := map[string]string{}
+			for k, v := range a.Params {
+				if !slices.Contains(secretParams, k) {
+					params[k] = v
+				}
+			}
+			a.Params = params
+		}
+		actions = append(actions, a)
+	}
+	set.Actions = actions
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set.UpdatedAt = s.now()
+	for i, old := range s.data.Sets {
+		if old.Platform == set.Platform && old.Name == set.Name {
+			s.data.Sets[i] = &set
+			return s.save()
+		}
+	}
+	s.data.Sets = append(s.data.Sets, &set)
+	return s.save()
+}
+
+// DeleteSet removes the set of the platform and name.
+func (s *Store) DeleteSet(platform, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, old := range s.data.Sets {
+		if old.Platform == platform && old.Name == name {
+			s.data.Sets = append(s.data.Sets[:i], s.data.Sets[i+1:]...)
+			return s.save()
+		}
+	}
+	return fmt.Errorf("no set %q of %s", name, platform)
 }

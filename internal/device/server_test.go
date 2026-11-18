@@ -71,9 +71,15 @@ func TestEnroll(t *testing.T) {
 	if code, _ := get(t, srv.URL+"/mdm/enroll?udid=../../x", "0123456789abcdef"); code != http.StatusBadRequest {
 		t.Errorf("invalid udid: %d", code)
 	}
-	code, body := get(t, srv.URL+"/mdm/enroll?udid=00008020-0005308201DA002E", "0123456789abcdef")
+	code, body := get(t, srv.URL+"/mdm/enroll?udid=00008020-0005308201DA002E&name=iPhone_XR", "0123456789abcdef")
 	if code != http.StatusOK {
 		t.Fatalf("enroll: %d %s", code, body)
+	}
+	if name := s.State.Name("00008020-0005308201DA002E"); name != "iPhone_XR" {
+		t.Errorf("the name of the device: %q", name)
+	}
+	if _, known := s.State.Device("00008020-0005308201DA002E"); known {
+		t.Error("a profile request is not an enrollment")
 	}
 	var m map[string]any
 	if _, err := plist.Unmarshal(body, &m); err != nil {

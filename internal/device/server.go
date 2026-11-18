@@ -109,6 +109,12 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// the name of the device on its host: the admin UI shows it
+	if name := strings.TrimSpace(r.URL.Query().Get("name")); udid != "" && name != "" && len(name) <= 80 {
+		if err := s.State.SetName(udid, name); err != nil {
+			s.Log.Error("the name of the device not saved", "udid", udid, "err", err)
+		}
+	}
 	s.Log.Info("enrollment profile issued", "udid", udid, "remote", r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
 	w.Header().Set("Cache-Control", "no-store")

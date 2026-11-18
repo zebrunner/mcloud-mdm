@@ -37,6 +37,8 @@ type Server struct {
 	AnswerTimeout time.Duration
 	// RefreshDelay is the wait after a new enrollment before its DDM notify and ProfileList
 	RefreshDelay time.Duration
+
+	jobs jobs
 }
 
 // Handler routes the UI, the API and the webhook.
@@ -58,6 +60,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/android/command", s.browser(s.androidCommand))
 	mux.HandleFunc("POST /api/android/delete", s.browser(s.androidDelete))
 	mux.HandleFunc("GET /api/android/log", s.androidLog)
+	mux.HandleFunc("GET /api/jobs", s.jobsView)
+	mux.HandleFunc("POST /api/jobs", s.browser(s.jobStart))
+	mux.HandleFunc("GET /api/sets", s.setsView)
+	mux.HandleFunc("POST /api/sets/save", s.browser(s.setSave))
+	mux.HandleFunc("POST /api/sets/delete", s.browser(s.setDelete))
 	mux.HandleFunc("POST /webhook", s.webhook)
 	return mux
 }
@@ -263,34 +270,21 @@ func (s *Server) presetInstall(w http.ResponseWriter, _ *http.Request, body map[
 			params[k], _ = v.(string)
 		}
 	}
-	data, err := p.Build(s.Config.OrgName, params)
-	if err != nil {
+	if _, err := p.Build(s.Config.OrgName, params); err != nil {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
-	var steps []string
-	// one by one, each after the answer to the previous one
-	for _, c := range p.Before {
-		id, err := s.send(udid, c.RequestType, c.Args)
-		if err != nil {
-			fail(w, http.StatusBadRequest, err)
-			return
+	status, output, id := s.installPreset(udid, p, params)
+	if status == stepError && id == "" {
+		fail(w, http.StatusBadRequest, errors.New(output))
+		return
+	}
+	if status != stepQueued {
+		if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
+			output += "\nProfileList: " + s.wait(refresh)
 		}
-		steps = append(steps, c.RequestType+": "+s.wait(id))
 	}
-	id, err := s.send(udid, "InstallProfile", map[string]any{"Payload": map[string]any{"$data": base64.StdEncoding.EncodeToString(data)}})
-	if err != nil {
-		fail(w, http.StatusBadRequest, err)
-		return
-	}
-	status := s.wait(id)
-	steps = append(steps, "InstallProfile "+p.ID+": "+status)
-	if status == "Queued" {
-		steps = append(steps, "no answer: the device did not connect (network?), do not install again before it does")
-	} else if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
-		steps = append(steps, "ProfileList: "+s.wait(refresh))
-	}
-	reply(w, http.StatusOK, map[string]string{"output": strings.Join(steps, "\n"), "uuid": id})
+	reply(w, http.StatusOK, map[string]string{"output": output, "uuid": id})
 }
 
 func (s *Server) presetRemove(w http.ResponseWriter, _ *http.Request, body map[string]any) {
@@ -300,14 +294,12 @@ func (s *Server) presetRemove(w http.ResponseWriter, _ *http.Request, body map[s
 		fail(w, http.StatusBadRequest, errors.New("unknown preset"))
 		return
 	}
-	id, err := s.send(udid, "RemoveProfile", map[string]any{"Identifier": p.ID})
-	if err != nil {
-		fail(w, http.StatusBadRequest, err)
+	status, output, id := s.removePreset(udid, p)
+	if status == stepError && id == "" {
+		fail(w, http.StatusBadRequest, errors.New(output))
 		return
 	}
-	status := s.wait(id)
-	output := "RemoveProfile: " + status
-	if status != "Queued" {
+	if status != stepQueued {
 		if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
 			output += "\nProfileList: " + s.wait(refresh)
 		}

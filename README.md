@@ -318,13 +318,16 @@ Per farm (a test farm first):
 
 ## Admin UI
 
-- The devices of the webhook (`Authenticate`, `TokenUpdate`, `CheckOut`), with the unlock token of `ClearPasscode` kept and never shown.
-- Every MDM command of iOS of Apple with its arguments and a hint: what it does, what it needs and its result on a supervised iPhone XR with iOS 18.7.11; `{"$data": "<base64>"}` is data, filled from a file.
-- The history of the commands with the reports of the devices; `Cleared` is a command never delivered: NanoMDM clears the queue of a device that enrolls again.
-- The ready profiles, installed by `InstallProfile` and removed by `RemoveProfile`, their "installed" marks from `ProfileList`.
-- The console of the API of NanoHUB with the DDM declarations (configurations, activations, sets, status) and NanoCMD.
-- The upload of the APNs push certificate and its key.
-- Two tabs, iOS and Android (`#ios`, `#android` in the URL). Android: the devices of Headwind MDM, every push command with its arguments and hints, the presets of the selected device, the commands sent with their delivery, the device log, the enrollment commands of a serial.
+Three tabs: iOS, Android and Server (`#ios`, `#android`, `#server` in the URL).
+
+- iOS and Android: the devices with their state and the settings on (a filter, All, None, Invert, Problems: not managed, left MDM, waiting for sync); the checked devices are the targets of every action, a click on a device shows its details (Android: its log).
+  - Settings: every preset On, Off or "-" (left as it is), with the counts of the selected devices; Apply runs the chosen ones on the selected devices.
+  - Commands: every MDM command of iOS of Apple (a hint: what it does, what it needs, its result on a supervised iPhone XR with iOS 18.7.11; `{"$data": "<base64>"}` is data, filled from a file) and every push command of the Android agent; Send runs it on the selected devices, Add to the set puts it into Settings; iOS: Push (wake up).
+  - Saved sets: the settings and the commands of Settings saved under a name per platform (kept in `state.json`, a password is never stored: asked when the set is applied); Apply runs a set on the selected devices, Edit loads it into Settings.
+  - Jobs: every Apply and Send is a job (`POST /api/jobs`, `GET /api/jobs`): the devices in parallel (8 at a time), the actions of a device one by one, a failed action does not stop the next ones; ok, queued (iOS: the device takes the command when it connects), error; the report of every iOS command. In memory, the last 50.
+  - The commands sent with their reports (iOS; `Cleared`: never delivered, NanoMDM clears the queue of a device that enrolls again) or their delivery (Android), the check-in events (iOS) or the device log (Android).
+- Server: the upload of the APNs push certificate and its key, the console of the API of NanoHUB with the DDM declarations (configurations, activations, sets, status) and NanoCMD, the manual enrollment of an Android serial.
+- The names of the iOS devices come from their hosts (`/mdm/enroll?udid=<udid>&name=<name>`); the unlock token of `ClearPasscode` is kept and never shown.
 
 ## Ready profiles
 

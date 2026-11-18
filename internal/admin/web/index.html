@@ -3,225 +3,254 @@
 <head>
 <meta charset="utf-8">
 <title>MCloud MDM</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --line:#dfe3e8; --muted:#6b7280; --accent:#2563eb; --ok:#15803d; --err:#b91c1c; --warn:#b45309; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:#111827; }
-  header { background:#111827; color:#fff; padding:10px 18px; display:flex; gap:24px; align-items:baseline; flex-wrap:wrap; }
+  header { background:#111827; color:#fff; padding:8px 18px; display:flex; gap:20px; align-items:center; flex-wrap:wrap; position:sticky; top:0; z-index:5; }
   header h1 { font-size:18px; margin:0; }
-  header .info { color:#cbd5e1; font-size:12px; }
-  header .info b { color:#fff; font-weight:500; }
-  main { display:grid; grid-template-columns: 330px 1fr 1fr; gap:14px; padding:14px; }
-  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
-  .device { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; cursor:pointer; }
-  .device.selected { border-color:var(--accent); box-shadow:0 0 0 2px #2563eb33; }
-  .udid { font-family:ui-monospace, Menlo, monospace; font-size:12px; }
-  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; background:#e5e7eb; margin-right:4px; }
-  .tag.on { background:#dcfce7; color:var(--ok); }
-  .tag.off { background:#fee2e2; color:var(--err); }
-  .muted { color:var(--muted); font-size:12px; }
-  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:5px 10px; cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
-  select, input[type=text], input[type=password] { font:inherit; padding:5px; border:1px solid var(--line); border-radius:6px; }
-  select { max-width:100%; }
-  textarea { width:100%; font:12px/1.4 ui-monospace, Menlo, monospace; border:1px solid var(--line); border-radius:6px; padding:6px; }
-  pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; margin:6px 0 0; }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  tbody tr { cursor:pointer; }
-  tbody tr:hover, tbody tr.selected { background:#eff6ff; }
-  .Acknowledged { color:var(--ok); font-weight:600; }
-  .Error, .CommandFormatError { color:var(--err); font-weight:600; }
-  .NotNow, .Queued { color:var(--warn); font-weight:600; }
-  .Cleared { color:var(--muted); font-weight:600; text-decoration:line-through; }
-  .scroll { max-height:300px; overflow:auto; }
-  .tabs button.active { background:#111827; color:#fff; border-color:#111827; }
-  #toast { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:6px; max-width:520px; display:none; white-space:pre-wrap; font-size:12px; }
-  .full { grid-column: 2 / span 2; }
-  .hint { background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:6px 8px; margin:6px 0; font-size:12px; color:#78350f; }
-  .hint:empty { display:none; }
-  .presets { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:10px; }
-  .preset { border:1px solid var(--line); border-radius:6px; padding:10px; }
-  .preset h3 { font-size:14px; margin:0 0 4px; }
-  .preset input { width:150px; }
   header nav { display:flex; gap:4px; }
   header nav button { background:#1f2937; color:#cbd5e1; border-color:#374151; }
   header nav button.active { background:#2563eb; color:#fff; border-color:#2563eb; }
-  .params label { display:flex; flex-direction:column; gap:2px; margin:6px 0; font-size:12px; color:var(--muted); }
-  .params input[type=text], .params textarea, .params select { width:100%; }
-  .params label.check { flex-direction:row; align-items:center; gap:6px; }
-  .presetrow { display:flex; gap:8px; align-items:flex-start; padding:6px 0; border-bottom:1px solid var(--line); }
-  .presetrow:last-child { border-bottom:none; }
-  .presetrow .muted { margin-top:2px; }
+  header .info { color:#cbd5e1; font-size:12px; }
+  header .info b { color:#fff; font-weight:500; }
+  header .warn b { color:#fbbf24; }
+  main { display:grid; grid-template-columns: minmax(560px, 1.25fr) minmax(420px, 1fr); gap:14px; padding:14px; align-items:start; }
+  main.server { grid-template-columns: 1fr 1fr; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+  section.full { grid-column: 1 / -1; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; display:flex; gap:8px; align-items:center; }
+  h2 .count { text-transform:none; letter-spacing:0; color:#111827; font-size:13px; font-weight:600; }
+  h3 { font-size:14px; margin:12px 0 6px; }
+  .udid { font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; background:#e5e7eb; margin:1px 3px 1px 0; white-space:nowrap; }
+  .tag.on { background:#dcfce7; color:var(--ok); }
+  .tag.off { background:#fee2e2; color:var(--err); }
+  .tag.wait { background:#fef3c7; color:var(--warn); }
+  .muted { color:var(--muted); font-size:12px; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:5px 10px; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--err); }
+  button.small { padding:2px 7px; font-size:12px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  .spacer { flex:1; }
+  select, input[type=text], input[type=password], input[type=search] { font:inherit; padding:5px; border:1px solid var(--line); border-radius:6px; }
+  select { max-width:100%; }
+  textarea { width:100%; font:12px/1.4 ui-monospace, Menlo, monospace; border:1px solid var(--line); border-radius:6px; padding:6px; }
+  pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; margin:6px 0 0; white-space:pre-wrap; word-break:break-word; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:#fff; }
+  td.nowrap, th.nowrap { white-space:nowrap; }
+  tbody tr.click { cursor:pointer; }
+  tbody tr.click:hover { background:#f8fafc; }
+  tbody tr.checked { background:#eff6ff; }
+  tbody tr.focus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .Acknowledged, .ok { color:var(--ok); font-weight:600; }
+  .Error, .CommandFormatError, .error { color:var(--err); font-weight:600; }
+  .NotNow, .Queued, .queued, .running { color:var(--warn); font-weight:600; }
+  .waiting { color:var(--muted); }
+  .Cleared { color:var(--muted); font-weight:600; text-decoration:line-through; }
+  .scroll { max-height:340px; overflow:auto; }
+  .devices { max-height:560px; overflow:auto; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:-2px 0 10px; }
+  .tabs button { border:none; border-bottom:2px solid transparent; border-radius:0; padding:6px 10px; color:var(--muted); background:none; }
+  .tabs button.active { color:#111827; border-bottom-color:var(--accent); font-weight:600; }
+  .hint { background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:6px 8px; margin:6px 0; font-size:12px; color:#78350f; }
+  .hint:empty { display:none; }
+  .note { background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; padding:6px 8px; margin:6px 0; font-size:12px; color:#1e3a8a; }
+  #toast { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:6px; max-width:520px; display:none; white-space:pre-wrap; font-size:12px; z-index:10; }
+  .preset { display:grid; grid-template-columns: 1fr auto; gap:4px 10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .preset:last-child { border-bottom:none; }
+  .preset .title { font-weight:500; }
+  .preset .params { grid-column: 1 / -1; display:flex; gap:6px; flex-wrap:wrap; }
+  .preset .params input, .preset .params select { width:140px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; height:28px; }
+  .seg button { border:none; border-radius:0; padding:3px 9px; font-size:12px; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button.active { background:#111827; color:#fff; }
+  .seg button.active.on { background:var(--ok); }
+  .seg button.active.off { background:var(--err); }
+  details > summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  .params-form label { display:flex; flex-direction:column; gap:2px; margin:6px 0; font-size:12px; color:var(--muted); }
+  .params-form input[type=text], .params-form textarea, .params-form select { width:100%; }
+  .params-form label.check { flex-direction:row; align-items:center; gap:6px; }
+  .footer { position:sticky; bottom:0; background:#fff; border-top:1px solid var(--line); margin:10px -12px -12px; padding:8px 12px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; border-radius:0 0 8px 8px; }
+  .item { display:flex; gap:6px; align-items:center; padding:4px 0; }
+  .set { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; }
+  .set .name { font-weight:600; }
+  .job { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; }
+  .job summary { color:#111827; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .bar { height:6px; border-radius:3px; background:#e5e7eb; overflow:hidden; display:flex; width:140px; }
+  .bar span { display:block; height:100%; }
   .sev-ERROR { color:var(--err); font-weight:600; } .sev-WARNING { color:var(--warn); font-weight:600; } .sev-INFO { color:var(--ok); }
   td.msg { white-space:pre-wrap; word-break:break-all; font-family:ui-monospace, Menlo, monospace; }
+  dialog { border:1px solid var(--line); border-radius:8px; padding:16px; max-width:520px; }
+  dialog::backdrop { background:#0f172a66; }
+  dialog label { display:flex; flex-direction:column; gap:3px; margin:8px 0; font-size:12px; color:var(--muted); }
+  dialog input { width:100%; }
+  .empty { color:var(--muted); font-size:12px; padding:8px 0; }
 </style>
 </head>
 <body>
 <header>
   <h1>MCloud MDM</h1>
-  <nav><button data-view="ios">iOS</button><button data-view="android">Android</button></nav>
-  <span class="info view-ios">MDM <b id="mdmUrl">-</b></span>
-  <span class="info view-ios">Topic <b id="topic">-</b></span>
-  <span class="info view-ios">Push certificate until <b id="pushExp">-</b></span>
-  <span class="info view-android">Headwind MDM <b id="androidServer">-</b></span>
-  <span class="info view-android">Agent <b id="androidAgent">-</b></span>
+  <nav><button data-view="ios">iOS</button><button data-view="android">Android</button><button data-view="server">Server</button></nav>
+  <span class="info" id="headerInfo"></span>
+  <span class="spacer"></span>
   <span class="info" id="refresh">-</span>
 </header>
-<main class="view-ios">
-  <section style="grid-row: span 3">
-    <h2>Devices</h2>
-    <div id="devices" class="muted">loading...</div>
-    <div class="hint">A device is enrolled over USB by the agent of its host with the enrollment profile of <code id="enrollUrl">/mdm/enroll</code> (a one-time SCEP challenge per profile). The agent also recovers a device that lost MDM and turns Developer Mode on: neither has an MDM command.</div>
-  </section>
 
+<main id="platform">
   <section>
-    <h2>Command</h2>
-    <div class="muted">Device: <span id="target" class="udid">none</span></div>
-    <div class="row" id="quick"></div>
-    <div class="row"><select id="catalog"></select></div>
-    <div class="muted" id="cmdNote"></div>
-    <div class="hint" id="cmdHint"></div>
-    <textarea id="args" rows="9" spellcheck="false"></textarea>
+    <h2>Devices <span class="count" id="selCount"></span></h2>
     <div class="row">
-      <button class="primary" id="send">Send</button>
-      <button id="push">Push only</button>
-      <label class="muted">File into the first empty <code>{"$data": ""}</code>: <input type="file" id="dataFile"></label>
+      <input type="search" id="filter" placeholder="filter: name, id, model, version" style="flex:1; min-width:180px">
+      <button class="small" id="selAll" title="Select every device shown by the filter">All</button>
+      <button class="small" id="selNone">None</button>
+      <button class="small" id="selInvert" title="Invert the selection of the devices shown">Invert</button>
+      <button class="small" id="selProblems" title="Select the devices that need attention: not managed, left MDM, waiting">Problems</button>
     </div>
-  </section>
-
-  <section>
-    <h2>Report</h2>
-    <div class="muted" id="detailTitle">choose a command of the history</div>
-    <pre id="detail">-</pre>
-  </section>
-
-  <section>
-    <h2>Commands</h2>
-    <div class="hint"><b class="Queued">Queued</b> waits for the device (no network or push: Push only) - <b class="Acknowledged">Acknowledged</b> done - <b class="Error">Error</b> refused, the reason is the ErrorChain of the report - <b class="CommandFormatError">CommandFormatError</b> invalid arguments - <b class="NotNow">NotNow</b> busy or locked, the device retries - <b class="Cleared">Cleared</b> never delivered: the device enrolled again and NanoMDM cleared its queue</div>
-    <div class="scroll">
+    <div class="devices">
       <table>
-        <thead><tr><th>Sent</th><th>Command</th><th>Status</th><th>Answered</th><th>Device</th></tr></thead>
-        <tbody id="history"></tbody>
+        <thead><tr><th><input type="checkbox" id="checkAll" title="All shown"></th><th>Device</th><th>Model / OS</th><th>Status</th><th class="nowrap">Seen</th><th>Settings on</th></tr></thead>
+        <tbody id="devices"></tbody>
       </table>
     </div>
+    <div class="muted" id="devicesHint"></div>
   </section>
 
-  <section>
-    <h2>Device events (webhook)</h2>
-    <div class="hint"><b>Authenticate</b> / <b>TokenUpdate</b> enrollment - <b>Connect Idle</b> the device connected and took its queue - <b>Connect &lt;status&gt;</b> a report - <b>CheckOut</b> the MDM profile was removed - <b>DeclarativeManagement</b> DDM synchronization</div>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>Time</th><th>Event</th><th>Device</th></tr></thead>
-        <tbody id="events"></tbody>
-      </table>
-    </div>
-  </section>
+  <section id="actions">
+    <h2>Apply to <span class="count" id="targetCount">0 devices</span></h2>
+    <div class="tabs" id="actionTabs"><button data-tab="settings">Settings</button><button data-tab="commands">Commands</button><button data-tab="sets">Saved sets</button></div>
 
-  <section class="full">
-    <h2>Ready profiles</h2>
-    <div class="hint">Installed on the selected device by InstallProfile with no prompt, removed by RemoveProfile. "installed" comes from ProfileList, refreshed after an install, a removal and an enrollment; "?" means no data or data older than the last enrollment ("Check" refreshes it).</div>
-    <div class="row"><button id="presetsCheck">Check (ProfileList)</button><span class="muted" id="presetsSeen"></span></div>
-    <div id="presets" class="presets"></div>
-  </section>
-
-  <section class="full">
-    <div class="row tabs"><button data-tab="raw" class="active">NanoHUB API (DDM, NanoCMD, ...)</button><button data-tab="cert">Push certificate</button></div>
-    <div id="tab-raw">
-      <div class="row"><select id="rawPreset"></select></div>
-      <div class="hint" id="rawHint"></div>
-      <div class="row">
-        <select id="rawMethod"><option>GET</option><option>PUT</option><option>POST</option><option>DELETE</option></select>
-        <input type="text" id="rawPath" style="flex:1">
-        <button class="primary" id="rawSend">Run</button>
+    <div id="tab-settings">
+      <div class="muted">Choose On or Off for the settings to change; "-" leaves a setting as it is. The counters show the state of the selected devices.</div>
+      <div id="settingsSetName" class="note" style="display:none"></div>
+      <div id="presetForm"></div>
+      <h3 id="formCommandsTitle" style="display:none">Commands of the set</h3>
+      <div id="formCommands"></div>
+      <div class="footer">
+        <button class="primary" id="formApply">Apply</button>
+        <button id="formSave" title="Save the chosen settings (and the commands added from Commands) as a named set">Save as set...</button>
+        <button id="formClear">Clear</button>
+        <span class="muted" id="formSummary"></span>
       </div>
-      <textarea id="rawBody" rows="6" spellcheck="false" placeholder="request body (JSON / plist)"></textarea>
-      <pre id="rawOut">-</pre>
     </div>
-    <div id="tab-cert" style="display:none">
-      <div class="hint">The APNs push certificate of identity.apple.com and its private key, PEM. Renew it every year with the SAME Apple ID: a new certificate (another topic) means enrolling every device again.</div>
-      <div class="row">Certificate <input type="file" id="certFile" accept=".pem,.crt,.cer"> Private key <input type="file" id="keyFile" accept=".pem,.key"><button class="primary" id="certSend">Upload to NanoHUB</button></div>
-      <pre id="certOut">-</pre>
+
+    <div id="tab-commands" style="display:none">
+      <div class="row" id="quick"></div>
+      <div class="row"><select id="catalog" style="flex:1"></select></div>
+      <div class="muted" id="cmdNote"></div>
+      <div class="hint" id="cmdHint"></div>
+      <div id="cmdArgsIOS">
+        <textarea id="args" rows="8" spellcheck="false"></textarea>
+        <label class="muted">File into the first empty <code>{"$data": ""}</code>: <input type="file" id="dataFile"></label>
+      </div>
+      <div class="params-form" id="cmdArgsAndroid"></div>
+      <div class="footer">
+        <button class="primary" id="cmdSend">Send</button>
+        <button id="cmdAdd" title="Add the command with its arguments to the settings form: it goes with Apply and with a saved set">Add to the set</button>
+        <button id="cmdPush" class="ios-only" title="APNs push only: the devices connect and take their queues (a command stuck in Queued)">Push (wake up)</button>
+      </div>
     </div>
+
+    <div id="tab-sets" style="display:none">
+      <div class="muted">A set is a list of settings and commands; Apply runs it on the selected devices, Edit loads it into Settings.</div>
+      <div id="sets"></div>
+    </div>
+  </section>
+
+  <section class="full">
+    <div class="tabs" id="activityTabs"><button data-tab="jobs">Jobs</button><button data-tab="history">Commands sent</button><button data-tab="events" id="eventsTab">Device events</button></div>
+    <div id="tab-jobs">
+      <div class="row"><span class="muted">Every Apply and Send is a job: the devices in parallel, the actions of a device one by one. Kept in memory, the last 50.</span></div>
+      <div id="jobs"></div>
+    </div>
+    <div id="tab-history" style="display:none">
+      <div class="row"><label class="muted"><input type="checkbox" id="historySelected"> only the selected devices</label><span class="muted" id="historyLegend"></span></div>
+      <div class="scroll"><table><thead id="historyHead"></thead><tbody id="history"></tbody></table></div>
+    </div>
+    <div id="tab-events" style="display:none">
+      <div class="row"><input type="search" id="eventsFilter" placeholder="filter" style="flex:1"><span class="muted" id="eventsSeen"></span></div>
+      <div class="muted" id="eventsLegend"></div>
+      <div class="scroll"><table><thead id="eventsHead"></thead><tbody id="events"></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="full" id="details">
+    <h2>Details <span class="count" id="detailsTitle">click a device or a command</span></h2>
+    <pre id="detailsBody">-</pre>
+    <div class="row android-only"><button class="danger" id="androidDelete" title="Removes the device and its configuration from Headwind MDM">Delete from the server</button>
+      <span class="muted">release the device first: a deleted device keeps its device owner without a server</span></div>
   </section>
 </main>
-<main class="view-android">
-  <section style="grid-row: span 3">
-    <h2>Devices</h2>
-    <div id="androidDevices" class="muted">loading...</div>
-    <div class="hint">The agent (android/agent) is the device owner, set over adb by <code>android/enroll.sh &lt;serial&gt;</code> on the
-      host of the device: no factory reset, no account (Google) on the device. It keeps the system launcher, grants no
-      permission and installs nothing by itself, always forbids safe mode. adb alone cannot remove it: "Release the device"
-      or <code>android/release.sh</code>. Every device has its configuration mcloud-&lt;serial&gt; in Headwind MDM.</div>
-    <h2 style="margin-top:12px">Enrollment</h2>
+
+<main id="server" class="server" style="display:none">
+  <section>
+    <h2>iOS: APNs push certificate</h2>
+    <div class="row"><span class="muted">Topic</span> <b class="udid" id="topic">-</b></div>
+    <div class="row"><span class="muted">Valid until</span> <b id="pushExp">-</b></div>
+    <div class="hint">The certificate of identity.apple.com and its private key, PEM. Renew it every year with the SAME Apple ID (Renew, not Create): a new topic means enrolling every iOS device again.</div>
+    <div class="row">Certificate <input type="file" id="certFile" accept=".pem,.crt,.cer"></div>
+    <div class="row">Private key <input type="file" id="keyFile" accept=".pem,.key"></div>
+    <div class="row"><button class="primary" id="certSend">Upload</button></div>
+    <pre id="certOut">-</pre>
+    <h2 style="margin-top:16px">iOS: enrollment</h2>
+    <div class="muted">MDM <span class="udid" id="mdmUrl">-</span></div>
+    <div class="hint">A supervised device is enrolled over USB by the agent of its host (<code>zebrunner-farm mdm enroll &lt;device&gt;</code>) with the profile of <code id="enrollUrl">/mdm/enroll</code> (a one-time SCEP challenge per profile). The agent also recovers a device that lost MDM and turns Developer Mode on: neither has an MDM command.</div>
+  </section>
+  <section>
+    <h2>Android: Headwind MDM</h2>
+    <div class="row"><span class="muted">Server</span> <b class="udid" id="androidServer">-</b></div>
+    <div class="row"><span class="muted">Agent APK</span> <b class="udid" id="androidAgent">-</b></div>
+    <div class="hint">The agent is the device owner, set over adb by <code>zebrunner-farm mdm enroll &lt;device&gt;</code> on the host of the device: no factory reset, no account (Google) on the device. It keeps the system launcher, grants no permission and installs nothing by itself, always forbids safe mode. adb alone cannot remove it: the command Release the device or <code>zebrunner-farm mdm release</code>.</div>
+    <h3>Manual enrollment</h3>
     <div class="row">
-      <input type="text" id="androidSerial" placeholder="adb serial" style="width:140px">
-      <input type="text" id="androidName" placeholder="name (optional)" style="width:140px">
+      <input type="text" id="androidSerial" placeholder="adb serial" style="width:160px">
+      <input type="text" id="androidName" placeholder="name (optional)" style="width:160px">
       <button id="androidEnroll" title="Creates the device and its configuration in Headwind MDM and shows the adb commands">Prepare</button>
     </div>
     <pre id="androidSetup" style="display:none"></pre>
   </section>
-
-  <section>
-    <h2>Command</h2>
-    <div class="muted">Device: <span id="androidTarget" class="udid">none</span></div>
-    <div class="row" id="androidQuick"></div>
-    <div class="row"><select id="androidCatalog"></select></div>
-    <div class="muted" id="androidNote"></div>
-    <div class="hint" id="androidHint"></div>
-    <div class="params" id="androidParams"></div>
-    <div class="row"><button class="primary" id="androidSend">Send</button>
-      <span class="muted">a push message (MQTT): the agent writes what it did into the device log</span></div>
-  </section>
-
-  <section>
-    <h2>Presets</h2>
-    <div class="hint">The configuration of the selected device: Headwind MDM pushes a change, the agent applies it at once
-      ("waiting for sync" until the device reports back). <code>no_safe_boot</code> is set by the agent always.</div>
-    <div id="androidPresets" class="muted">choose a device</div>
-    <div class="muted" id="androidRestrictions"></div>
-  </section>
-
-  <section>
-    <h2>Commands sent</h2>
-    <div class="hint"><b class="Acknowledged">delivered</b>: the device log has "Got Push Message" of it - <b class="Queued">sent</b>: not seen yet (no
-      network: Headwind MDM keeps it until the agent connects) - <b class="Error">error</b>: Headwind MDM refused it. Kept in memory, the last 300.</div>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>Sent</th><th>Command</th><th>Status</th><th>Payload</th><th>Device</th></tr></thead>
-        <tbody id="androidHistory"></tbody>
-      </table>
-    </div>
-  </section>
-
-  <section>
-    <h2>Device log</h2>
-    <div class="row"><input type="text" id="androidLogFilter" placeholder="filter" style="flex:1"><span class="muted" id="androidLogSeen"></span></div>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
-        <tbody id="androidLog"></tbody>
-      </table>
-    </div>
-  </section>
-
   <section class="full">
-    <h2>Device</h2>
-    <pre id="androidDevice">-</pre>
-    <div class="row"><button id="androidDelete" title="Removes the device and its configuration from Headwind MDM">Delete from the server</button>
-      <span class="muted">release the device first: a deleted device keeps its device owner without a server</span></div>
+    <h2>iOS: NanoHUB API (DDM, NanoCMD, ...)</h2>
+    <div class="row"><select id="rawPreset" style="flex:1"></select><span class="muted">{udid}:</span><select id="rawDevice"></select></div>
+    <div class="hint" id="rawHint"></div>
+    <div class="row">
+      <select id="rawMethod"><option>GET</option><option>PUT</option><option>POST</option><option>DELETE</option></select>
+      <input type="text" id="rawPath" style="flex:1">
+      <button class="primary" id="rawSend">Run</button>
+    </div>
+    <textarea id="rawBody" rows="6" spellcheck="false" placeholder="request body (JSON / plist)"></textarea>
+    <pre id="rawOut">-</pre>
   </section>
 </main>
+
+<dialog id="dialog">
+  <form method="dialog">
+    <div id="dialogText" style="white-space:pre-line"></div>
+    <div id="dialogFields"></div>
+    <div class="row" style="flex-direction:row-reverse; margin-top:12px"><button value="ok" class="primary" id="dialogOk">OK</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
 <div id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let catalog = [], presets = [], state = null, selectedDevice = localStorage.getItem("device") || "", selectedCommand = "";
+const el = (tag, props = {}, ...children) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else if (k.startsWith("on")) e[k] = v;
+    else if (k === "dataset") Object.assign(e.dataset, v); else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children) if (c !== null && c !== undefined) e.append(c);
+  return e;
+};
 
-const QUICK = ["DeviceInformation", "ProfileList", "InstalledApplicationList", "SecurityInfo", "CertificateList", "Settings", "RestartDevice", "DeviceLock"];
 const RAW_PRESETS = [
   ["DDM: declarations", "GET", "api/v1/ddm/declarations", "",
    "The declarations of the server. A configuration does nothing alone: an activation applies it, a set bound to the device delivers both."],
@@ -262,6 +291,17 @@ const RAW_PRESETS = [
   ["NanoHUB: version", "GET", "version", "", ""],
 ];
 
+const QUICK = {ios: ["DeviceInformation", "ProfileList", "InstalledApplicationList", "Settings: TimeZone", "RestartDevice"],
+               android: ["sync", "run-app", "clear-app-data", "grant-permissions", "run-command", "reboot"]};
+
+// the data of a platform: devices (rows), presets, commands; the selection, the focused device and the settings form
+const P = {
+  ios: {devices: [], presets: [], commands: [], selected: new Set(), focus: "", form: {}, params: {}, extra: [], setName: "", raw: null},
+  android: {devices: [], presets: [], commands: [], selected: new Set(), focus: "", form: {}, params: {}, extra: [], setName: "", raw: null, log: []},
+};
+let view = "ios", sets = [], jobsList = [], focusCommand = "", openJobs = new Set();
+const cur = () => P[view];
+
 function toast(text, ms = 4000) { const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms); }
 
 async function call(path, body) {
@@ -271,412 +311,600 @@ async function call(path, body) {
   return data;
 }
 
-function cell(text, cls) { const td = document.createElement("td"); td.textContent = text ?? ""; if (cls) td.className = cls; return td; }
-function short(u) { return u ? u.slice(0, 8) + "..." + u.slice(-6) : ""; }
-function time(t) { return t ? t.replace("T", " ").replace("Z", "").slice(5, 19) : ""; }
+function time(t) { return t ? new Date(t).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"}) : ""; }
+function ago(t) {
+  if (!t) return "never";
+  const s = (Date.now() - Date.parse(t)) / 1000;
+  if (s < 90) return "now"; if (s < 5400) return Math.round(s / 60) + " min"; if (s < 129600) return Math.round(s / 3600) + " h";
+  return Math.round(s / 86400) + " d";
+}
+function short(u) { return u && u.length > 18 ? u.slice(0, 8) + "..." + u.slice(-6) : u; }
+
+// ask: a modal with optional fields; resolves to the values or null
+function ask(text, fields = [], ok = "OK") {
+  const d = $("dialog");
+  $("dialogText").textContent = text; $("dialogOk").textContent = ok;
+  const box = $("dialogFields"); box.innerHTML = "";
+  const inputs = fields.map(f => {
+    const i = el("input", {type: f.type || "text", value: f.value || "", placeholder: f.placeholder || "", autocomplete: "off"});
+    box.append(el("label", {}, f.label, i)); return [f.key, i];
+  });
+  d.returnValue = "";
+  d.showModal(); if (inputs.length) inputs[0][1].focus();
+  return new Promise(res => d.onclose = () => res(d.returnValue === "ok" ? Object.fromEntries(inputs.map(([k, i]) => [k, i.value])) : null));
+}
+
+/* ---------- devices ---------- */
+
+function iosRows(st) {
+  const profiles = st.profiles || {};
+  return (st.devices || []).map(d => {
+    const enrolled = d.enrolled_at && !d.checked_out;
+    const seen = profiles[d.udid];
+    const known = seen && !seen.stale;
+    const presets = {};
+    for (const p of P.ios.presets) presets[p.name] = known ? (seen.ids || []).includes(p.identifier) : null;
+    return {id: d.udid, name: d.name || "", model: d.product || "", os: d.os_version ? "iOS " + d.os_version : "",
+      status: enrolled ? [["enrolled", "on"]] : [[d.checked_out ? "left MDM" : "enrolling", "off"]],
+      problem: !enrolled, enrolled, seen: d.last_seen_at, presets, raw: d,
+      note: known ? "" : "profiles unknown: ProfileList"};
+  }).sort((a, b) => (a.name || "~" + a.id).localeCompare(b.name || "~" + b.id));
+}
+
+function androidRows(a) {
+  return (a.devices || []).map(d => {
+    const status = [[d.device_owner ? "device owner" : "not managed", d.device_owner ? "on" : "off"]];
+    if (d.pending) status.push(["waiting for sync", "wait"]);
+    if (d.unmanaged) status.push(["foreign configuration", "off"]);
+    return {id: d.serial, name: d.name || "", model: d.model || "", os: d.os_version ? "Android " + d.os_version : "",
+      status, problem: !d.device_owner || d.pending || d.unmanaged, enrolled: !d.unmanaged, seen: d.last_sync_at,
+      battery: d.battery, presets: d.presets || {}, raw: d};
+  });
+}
+
+function shown() {
+  const f = $("filter").value.trim().toLowerCase();
+  return cur().devices.filter(d => !f || [d.name, d.id, d.model, d.os, d.raw.serial].join(" ").toLowerCase().includes(f));
+}
+
+function saveSelection() { localStorage.setItem("sel-" + view, JSON.stringify([...cur().selected])); }
+function loadSelection(p) { try { P[p].selected = new Set(JSON.parse(localStorage.getItem("sel-" + p) || "[]")); } catch (e) {} P[p].focus = localStorage.getItem("focus-" + p) || ""; }
+function setFocus(id) { cur().focus = id; localStorage.setItem("focus-" + view, id); renderDevices(); renderDetails(); if (view === "android") refreshAndroidLog(); renderEvents(); }
 
 function renderDevices() {
-  const box = $("devices"); box.innerHTML = "";
-  const devices = (state.devices || []).slice().sort((a, b) => a.udid.localeCompare(b.udid));
-  if (!devices.length) { box.textContent = "no device enrolled yet"; return; }
-  if (!devices.some(d => d.udid === selectedDevice)) selectedDevice = devices[0].udid;
-  for (const d of devices) {
-    const div = document.createElement("div");
-    div.className = "device" + (d.udid === selectedDevice ? " selected" : "");
-    const udid = document.createElement("div"); udid.className = "udid"; udid.textContent = d.udid;
-    const tags = document.createElement("div"); tags.className = "row";
-    const enrolled = d.enrolled_at && !d.checked_out;
-    tags.innerHTML = `<span class="tag ${enrolled ? "on" : "off"}">${enrolled ? "enrolled" : (d.checked_out ? "left MDM (CheckOut)" : "enrolling")}</span>${d.unlock_token ? '<span class="tag">UnlockToken</span>' : ""}`;
-    const info = document.createElement("div"); info.className = "muted";
-    info.textContent = [d.product, d.os_version && "iOS " + d.os_version, d.serial].filter(Boolean).join(", ") +
-      (d.last_seen_at ? ` - seen ${time(d.last_seen_at)}` : "");
-    const actions = document.createElement("div"); actions.className = "row";
-    if (enrolled) {
-      const b = document.createElement("button"); b.textContent = "Push";
-      b.title = "APNs push only: the device connects and takes its queue; useful for a command stuck in Queued.";
-      b.onclick = (e) => { e.stopPropagation(); doPush(d.udid); }; actions.appendChild(b);
+  const p = cur(), rows = shown(), box = $("devices");
+  // drop the devices that are gone
+  for (const id of [...p.selected]) if (!p.devices.some(d => d.id === id)) p.selected.delete(id);
+  box.innerHTML = "";
+  if (!p.devices.length) box.append(el("tr", {}, el("td", {colspan: 6, class: "empty", text: view === "ios" ? "no iOS device enrolled yet" : (p.raw && !p.raw.enabled ? "Android is off: HMDM_URL is not set" : "no Android device yet")})));
+  for (const d of rows) {
+    const check = el("input", {type: "checkbox"}); check.checked = p.selected.has(d.id);
+    check.onclick = (e) => { e.stopPropagation(); check.checked ? p.selected.add(d.id) : p.selected.delete(d.id); saveSelection(); renderSelection(); tr.classList.toggle("checked", check.checked); };
+    const on = p.presets.filter(x => d.presets[x.name]).map(x => el("span", {class: "tag on", title: x.title, text: x.short || x.name}));
+    const unknown = Object.values(d.presets).some(v => v === null);
+    const tr = el("tr", {class: "click" + (check.checked ? " checked" : "") + (p.focus === d.id ? " focus" : ""), title: "click: details; the checkbox selects"},
+      el("td", {}, check),
+      el("td", {}, el("div", {text: d.name || "-"}), el("div", {class: "muted udid", text: d.id})),
+      el("td", {}, el("div", {text: d.model}), el("div", {class: "muted", text: [d.os, d.battery !== undefined && d.battery !== null ? d.battery + "%" : ""].filter(Boolean).join(", ")})),
+      el("td", {}, ...d.status.map(([t, c]) => el("span", {class: "tag " + c, text: t}))),
+      el("td", {class: "nowrap", title: d.seen ? time(d.seen) : ""}, ago(d.seen)),
+      el("td", {}, ...(unknown ? [el("span", {class: "tag", title: "no ProfileList since the last enrollment: Commands, ProfileList", text: "?"})] : on)));
+    tr.onclick = () => setFocus(d.id);
+    box.append(tr);
+  }
+  const all = rows.length && rows.every(d => p.selected.has(d.id));
+  $("checkAll").checked = !!all; $("checkAll").indeterminate = !all && rows.some(d => p.selected.has(d.id));
+  $("devicesHint").textContent = rows.length < p.devices.length ? `${rows.length} of ${p.devices.length} shown` : "";
+  renderSelection();
+}
+
+function targets() { return cur().devices.filter(d => cur().selected.has(d.id)); }
+
+function renderSelection() {
+  const n = targets().length, total = cur().devices.length;
+  $("selCount").textContent = `${n} of ${total} selected`;
+  $("targetCount").textContent = n === 1 ? "1 device" : `${n} devices`;
+  for (const b of ["formApply", "cmdSend", "cmdPush"]) $(b).disabled = !n;
+  document.querySelectorAll(".set-apply").forEach(b => b.disabled = !n);
+  renderCounters();
+}
+
+function selectRows(fn) { const p = cur(); for (const d of shown()) fn(d) ? p.selected.add(d.id) : p.selected.delete(d.id); saveSelection(); renderDevices(); }
+
+/* ---------- settings form ---------- */
+
+function presetStateCounts(name) {
+  const c = {on: 0, off: 0, unknown: 0};
+  for (const d of targets()) { const v = d.presets[name]; v === null || v === undefined ? c.unknown++ : v ? c.on++ : c.off++; }
+  return c;
+}
+
+function renderCounters() {
+  for (const p of cur().presets) {
+    const box = $("count-" + p.name); if (!box) continue;
+    const c = presetStateCounts(p.name), parts = [];
+    if (c.on) parts.push(el("span", {class: "tag on", text: "on " + c.on}));
+    if (c.off) parts.push(el("span", {class: "tag", text: "off " + c.off}));
+    if (c.unknown) parts.push(el("span", {class: "tag", title: "unknown: no ProfileList since the enrollment", text: "? " + c.unknown}));
+    box.replaceChildren(...parts);
+  }
+  const acts = formActions(false);
+  $("formSummary").textContent = acts.length ? `${acts.length} action${acts.length > 1 ? "s" : ""}` : "nothing chosen";
+  $("formApply").disabled = !targets().length || !acts.length;
+  $("formSave").disabled = !acts.length;
+}
+
+function buildPresetForm() {
+  const p = cur(), box = $("presetForm"); box.innerHTML = "";
+  for (const x of p.presets) {
+    const seg = el("div", {class: "seg"});
+    for (const [v, label, cls] of [["", "-", ""], ["on", "On", "on"], ["off", "Off", "off"]]) {
+      const b = el("button", {class: cls + ((p.form[x.name] || "") === v ? " active" : ""), text: label, title: v ? `turn it ${v} on the selected devices` : "leave it as it is"});
+      b.onclick = () => { p.form[x.name] = v; buildPresetForm(); };
+      seg.append(b);
     }
-    div.append(udid, tags, info, actions);
-    div.onclick = () => { selectedDevice = d.udid; localStorage.setItem("device", d.udid); renderDevices(); renderPresets(); };
-    box.appendChild(div);
+    const row = el("div", {class: "preset"},
+      el("div", {}, el("div", {class: "title", text: x.title}), el("div", {id: "count-" + x.name})),
+      seg,
+      el("details", {style: "grid-column: 1 / -1"}, el("summary", {text: "what it does"}), el("div", {class: "muted", text: x.hint}), x.identifier ? el("div", {class: "muted udid", text: x.identifier}) : null));
+    if ((x.params || []).length && p.form[x.name] === "on") {
+      const params = el("div", {class: "params"});
+      p.params[x.name] ||= {};
+      for (const key of x.params) {
+        let input;
+        if (key === "encryption") {
+          input = el("select", {title: "encryption"});
+          for (const v of ["Any", "WPA2", "WPA3", "WPA", "None"]) input.append(el("option", {text: v}));
+        } else input = el("input", {type: key === "password" ? "password" : "text", placeholder: key, autocomplete: "off", title: key === "password" ? "never stored: asked again when a set is applied" : key});
+        input.value = p.params[x.name][key] || (key === "encryption" ? "Any" : "");
+        input.oninput = input.onchange = () => { p.params[x.name][key] = input.value; };
+        params.append(input);
+      }
+      row.append(params);
+    }
+    box.append(row);
   }
-  $("target").textContent = selectedDevice || "none";
+  renderFormCommands();
+  $("settingsSetName").style.display = p.setName ? "" : "none";
+  $("settingsSetName").textContent = p.setName ? `Editing the set "${p.setName}": Save as set keeps its name by default.` : "";
+  renderCounters();
 }
 
-function renderHistory() {
-  const body = $("history"); body.innerHTML = "";
-  for (const c of state.commands || []) {
-    const tr = document.createElement("tr");
-    if (c.uuid === selectedCommand) tr.className = "selected";
-    tr.append(cell(time(c.sent_at)), cell(c.type), cell(c.status, c.status), cell(time(c.answered_at)), cell(short(c.udid)));
-    tr.onclick = () => { selectedCommand = c.uuid; renderHistory(); renderDetail(); };
-    body.appendChild(tr);
+function renderFormCommands() {
+  const p = cur(), box = $("formCommands"); box.innerHTML = "";
+  $("formCommandsTitle").style.display = p.extra.length ? "" : "none";
+  p.extra.forEach((a, i) => {
+    const args = a.args && Object.keys(a.args).length ? JSON.stringify(a.args) : (a.params && Object.keys(a.params).length ? JSON.stringify(a.params) : "");
+    box.append(el("div", {class: "item"},
+      el("button", {class: "small", text: "x", title: "remove", onclick: () => { p.extra.splice(i, 1); renderFormCommands(); renderCounters(); }}),
+      el("span", {text: a.kind === "push" ? "Push (wake up)" : commandTitle(a.name)}), el("span", {class: "muted udid", text: args.length > 90 ? args.slice(0, 90) + "..." : args})));
+  });
+}
+
+// formActions: the presets chosen (in their order), then the commands added
+function formActions(withSecrets = true) {
+  const p = cur(), out = [];
+  for (const x of p.presets) {
+    const v = p.form[x.name]; if (!v) continue;
+    const a = {kind: "preset", name: x.name, on: v === "on"};
+    if (v === "on" && (x.params || []).length) a.params = Object.fromEntries(Object.entries(p.params[x.name] || {}).filter(([k]) => withSecrets || k !== "password"));
+    out.push(a);
   }
+  return out.concat(p.extra.map(a => ({...a})));
 }
 
-function renderDetail() {
-  const c = (state.commands || []).find(x => x.uuid === selectedCommand);
-  if (!c) return;
-  $("detailTitle").textContent = `${c.type} - ${c.status} - ${c.uuid}`;
-  $("detail").textContent = JSON.stringify({args: c.args, report: c.report ?? "(no report yet)", enqueue: c.enqueue}, null, 2);
+function commandTitle(name) {
+  if (view === "android") return (P.android.commands.find(c => c.name === name) || {}).title || name;
+  return name;
 }
 
-function renderEvents() {
-  const body = $("events"); body.innerHTML = "";
-  for (const e of (state.events || []).slice(0, 150)) {
-    const tr = document.createElement("tr");
-    tr.append(cell(time(e.at)), cell(e.event, e.event.split(" ")[1]), cell(short(e.udid)));
-    tr.title = e.detail ? JSON.stringify(e.detail) : "";
-    body.appendChild(tr);
+function describe(actions) {
+  return actions.map(a => a.kind === "preset" ? `${(cur().presets.find(x => x.name === a.name) || {}).title || a.name}: ${a.on ? "on" : "off"}`
+    : a.kind === "push" ? "Push (wake up)" : commandTitle(a.name)).join("\n");
+}
+
+function dangerous(actions) {
+  const list = [];
+  for (const a of actions) {
+    if (a.kind === "command") {
+      const c = view === "ios" ? P.ios.commands.find(x => x.type === a.name) : P.android.commands.find(x => x.name === a.name);
+      if (c && c.danger) list.push(commandTitle(a.name));
+    }
+    if (a.kind === "preset" && a.name === "wifi-allowed-only" && a.on) list.push("Wi-Fi of the allowed network only");
   }
+  return list;
 }
 
-function renderPresets() {
-  const seen = (state.profiles || {})[selectedDevice];
-  $("presetsSeen").textContent = !seen ? "no ProfileList yet"
-    : seen.stale ? `ProfileList of ${time(seen.at)} is older than the last enrollment: Check` : `ProfileList of ${time(seen.at)}`;
-  const known = seen && !seen.stale;
-  for (const p of presets) {
-    const tag = $("preset-tag-" + p.name);
-    const on = known && (seen.ids || []).includes(p.identifier);
-    tag.className = "tag " + (known && on ? "on" : "");
-    tag.textContent = known ? (on ? "installed" : "not installed") : "?";
+// runActions: asks for the missing secrets and a confirmation, then starts the job
+async function runActions(actions, title) {
+  const devs = targets();
+  if (!devs.length) return toast("select the devices first");
+  if (!actions.length) return toast("nothing to apply");
+  for (const a of actions) {
+    if (view === "ios" && a.kind === "preset" && a.name === "wifi-allowed-only" && a.on) {
+      if (!a.params || !a.params.ssid) return toast("Wi-Fi: the SSID is required");
+      if (!a.params.password) {
+        const v = await ask(`The password of the Wi-Fi network "${a.params.ssid}" (never stored; empty for an open network).`, [{key: "password", label: "password", type: "password"}]);
+        if (v === null) return;
+        a.params.password = v.password;
+      }
+    }
   }
-}
-
-async function refresh() {
+  const danger = dangerous(actions);
+  let text = `${title ? title + "\n\n" : ""}${describe(actions)}\n\non ${devs.length} device${devs.length > 1 ? "s" : ""}: ${devs.slice(0, 6).map(d => d.name || short(d.id)).join(", ")}${devs.length > 6 ? ", ..." : ""}`;
+  if (danger.length) text += `\n\nChanges the devices: ${danger.join(", ")}.` + (danger.includes("Wi-Fi of the allowed network only") ? " A wrong SSID or password leaves a device without Wi-Fi and MDM until the agent of its host recovers it over USB." : "");
+  if (await ask(text, [], danger.length ? "Run anyway" : "Run") === null) return;
   try {
-    state = await call("api/state");
-    $("mdmUrl").textContent = state.server.mdm_url;
-    $("enrollUrl").textContent = state.server.enroll_url;
-    $("topic").textContent = state.server.topic || "no push certificate";
-    $("pushExp").textContent = state.server.push_not_after || "-";
-    $("refresh").textContent = "updated " + new Date().toLocaleTimeString();
-    renderDevices(); renderHistory(); renderDetail(); renderEvents(); renderPresets();
-  } catch (e) { $("refresh").textContent = "error: " + e.message; }
-}
-
-function chooseCommand(type) {
-  const c = catalog.find(x => x.type === type) || catalog[0];
-  $("catalog").value = c.type;
-  $("args").value = JSON.stringify(c.args, null, 2);
-  $("cmdNote").textContent = [c.supervised ? "supervised only" : "", c.danger ? "changes the device: asks first" : ""].filter(Boolean).join(" - ");
-  $("cmdHint").textContent = c.hint || "";
-}
-
-async function doSend() {
-  const c = catalog.find(x => x.type === $("catalog").value);
-  if (!selectedDevice) return toast("choose a device");
-  let args;
-  try { args = JSON.parse($("args").value || "{}"); } catch (e) { return toast("the arguments are not JSON: " + e.message); }
-  if (c.danger && !confirm(`${c.type} on ${selectedDevice}?`)) return;
-  try {
-    const r = await call("api/command", {udid: selectedDevice, type: c.type, args});
-    selectedCommand = r.uuid; toast(`${c.type} sent (${r.uuid.slice(0, 8)})`); refresh();
+    const r = await call("api/jobs", {platform: view, title: title || "", devices: devs.map(d => d.id), actions});
+    openJobs.add(r.id); toast(`job ${r.id} started on ${devs.length} device${devs.length > 1 ? "s" : ""}`);
+    showActivity("jobs"); refreshJobs();
   } catch (e) { toast("error: " + e.message, 8000); }
 }
 
-async function doPush(udid) { try { const r = await call("api/push", {udid}); toast("push: " + r.response); } catch (e) { toast("error: " + e.message); } }
-
-function fileToBase64(file) {
-  return new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.onerror = fail; r.readAsDataURL(file); });
-}
-
-function buildPresets() {
-  const box = $("presets");
-  for (const p of presets) {
-    const div = document.createElement("div"); div.className = "preset";
-    const h = document.createElement("h3"); h.textContent = p.title + " ";
-    const tag = document.createElement("span"); tag.id = "preset-tag-" + p.name; h.appendChild(tag);
-    const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = p.hint;
-    const id = document.createElement("div"); id.className = "muted udid"; id.textContent = p.identifier;
-    div.append(h, hint, id);
-    const inputs = {};
-    if ((p.params || []).length) {
-      const row = document.createElement("div"); row.className = "row";
-      for (const key of p.params) {
-        let el;
-        if (key === "encryption") {
-          el = document.createElement("select");
-          for (const v of ["Any", "WPA2", "WPA3", "WPA", "None"]) { const o = document.createElement("option"); o.textContent = v; el.appendChild(o); }
-        } else {
-          el = document.createElement("input"); el.type = key === "password" ? "password" : "text"; el.placeholder = key; el.autocomplete = "off";
-        }
-        inputs[key] = el; row.appendChild(el);
-      }
-      div.appendChild(row);
-    }
-    const actions = document.createElement("div"); actions.className = "row";
-    const btn = (label, cls, fn) => { const b = document.createElement("button"); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; actions.appendChild(b); };
-    btn("Install", "primary", async () => {
-      if (!selectedDevice) return toast("choose a device");
-      const params = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
-      if (p.name === "wifi-allowed-only" && !confirm(`The device will join ONLY "${params.ssid}". A wrong SSID or password leaves it without Wi-Fi and MDM until the agent of its host recovers it over USB. Go on?`)) return;
-      toast("installing...", 30000);
-      try { const r = await call("api/preset/install", {udid: selectedDevice, name: p.name, params}); toast(r.output, 8000); selectedCommand = r.uuid; }
-      catch (e) { toast("error: " + e.message, 10000); }
-      if (inputs.password) inputs.password.value = "";
-      refresh();
-    });
-    btn("Remove", "", async () => {
-      try { const r = await call("api/preset/remove", {udid: selectedDevice, name: p.name}); toast(r.output); selectedCommand = r.uuid; } catch (e) { toast("error: " + e.message, 8000); }
-      refresh();
-    });
-    div.appendChild(actions);
-    box.appendChild(div);
-  }
-  $("presetsCheck").onclick = async () => {
-    if (!selectedDevice) return toast("choose a device");
-    try { const r = await call("api/command", {udid: selectedDevice, type: "ProfileList", args: {}}); selectedCommand = r.uuid; toast("ProfileList sent"); } catch (e) { toast("error: " + e.message); }
-  };
-}
-
-let android = null, androidLog = [], androidDevice = localStorage.getItem("androidDevice") || "";
-const ANDROID_QUICK = ["sync", "run-app", "intent", "clear-app-data", "grant-permissions", "run-command", "reboot"];
-
-function showView(view) {
-  if (view !== "android") view = "ios";
-  localStorage.setItem("view", view);
-  history.replaceState(null, "", "#" + view);
-  document.querySelectorAll("header nav button").forEach(b => b.classList.toggle("active", b.dataset.view === view));
-  document.querySelectorAll(".view-ios").forEach(e => e.style.display = view === "ios" ? "" : "none");
-  document.querySelectorAll(".view-android").forEach(e => e.style.display = view === "android" ? "" : "none");
-  if (view === "android") refreshAndroid();
-}
-
-function selectAndroid(serial) {
-  androidDevice = serial; localStorage.setItem("androidDevice", serial); androidLog = [];
-  renderAndroid(); refreshAndroidLog();
-}
-
-function renderAndroidDevices() {
-  const box = $("androidDevices"); box.innerHTML = "";
-  if (!android.enabled) { box.textContent = "Android is off: HMDM_URL is not set"; return; }
-  if (!(android.devices || []).length) { box.textContent = "no Android device yet"; return; }
-  for (const d of android.devices) {
-    const div = document.createElement("div"); div.className = "device" + (d.serial === androidDevice ? " selected" : "");
-    const title = document.createElement("div");
-    const b = document.createElement("b"); b.textContent = (d.name || d.model || d.serial) + " "; title.appendChild(b);
-    const owner = document.createElement("span"); owner.className = "tag " + (d.device_owner ? "on" : "off");
-    owner.textContent = d.device_owner ? "device owner" : "not managed"; title.appendChild(owner);
-    if (d.pending) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "waiting for sync"; title.appendChild(t); }
-    if (d.unmanaged) { const t = document.createElement("span"); t.className = "tag off"; t.title = "not a configuration mcloud-<serial>: enroll it again"; t.textContent = "foreign configuration"; title.appendChild(t); }
-    const info = document.createElement("div"); info.className = "muted";
-    info.textContent = `${d.serial} - ${d.model || "?"}, Android ${d.os_version || "?"}, ${d.battery ?? "?"}%`;
-    const sync = document.createElement("div"); sync.className = "muted";
-    sync.textContent = "last sync " + (d.last_sync_at ? new Date(d.last_sync_at).toLocaleString() : "never");
-    div.append(title, info, sync);
-    div.onclick = () => selectAndroid(d.serial);
-    box.appendChild(div);
-  }
-}
-
-function renderAndroidPresets() {
-  const d = (android.devices || []).find(x => x.serial === androidDevice);
-  const box = $("androidPresets");
-  if (!d) { box.textContent = "choose a device"; $("androidRestrictions").textContent = ""; return; }
-  if (box.contains(document.activeElement)) return;
-  box.innerHTML = ""; box.className = "";
-  for (const p of android.presets) {
-    const row = document.createElement("div"); row.className = "presetrow";
-    const box2 = document.createElement("input"); box2.type = "checkbox"; box2.checked = !!(d.presets || {})[p.name]; box2.disabled = d.unmanaged;
-    box2.onchange = async () => {
-      try { await call("api/android/preset", {serial: d.serial, name: p.name, on: box2.checked}); toast(`${p.title}: ${box2.checked ? "on" : "off"}`); }
-      catch (e) { toast("error: " + e.message, 8000); box2.checked = !box2.checked; }
-      refreshAndroid();
-    };
-    const text = document.createElement("div");
-    const t = document.createElement("div"); t.textContent = p.title;
-    const h = document.createElement("div"); h.className = "muted"; h.textContent = p.hint;
-    text.append(t, h); row.append(box2, text); box.appendChild(row);
-  }
-  $("androidRestrictions").textContent = "restrictions of the configuration: " + (d.restrictions || "none");
-}
-
-function chooseAndroidCommand(name) {
-  const c = android.commands.find(x => x.name === name) || android.commands[0];
-  $("androidCatalog").value = c.name;
-  $("androidHint").textContent = c.hint;
-  $("androidNote").textContent = c.danger ? "changes the device: asks first" : "";
-  const box = $("androidParams"); box.innerHTML = "";
-  for (const p of c.params || []) {
-    const label = document.createElement("label"); label.className = p.type === "bool" ? "check" : "";
-    let el;
-    if (p.type === "select") {
-      el = document.createElement("select");
-      for (const o of p.options) { const opt = document.createElement("option"); opt.textContent = o; el.appendChild(opt); }
-    } else if (p.type === "bool") {
-      el = document.createElement("input"); el.type = "checkbox";
-    } else if (p.type === "json" || p.key === "command") {
-      el = document.createElement("textarea"); el.rows = p.type === "json" ? 3 : 2; el.spellcheck = false;
-    } else {
-      el = document.createElement("input"); el.type = "text"; el.autocomplete = "off";
-    }
-    if (p.default && p.type !== "bool") el.value = p.default;
-    if (p.hint) { el.placeholder = p.hint; el.title = p.hint; }
-    el.dataset.key = p.key; el.dataset.type = p.type;
-    const caption = document.createElement("span"); caption.textContent = p.title + (p.required ? " *" : "");
-    if (p.type === "bool") label.append(el, caption); else label.append(caption, el);
-    box.appendChild(label);
-  }
-}
-
-async function sendAndroid() {
-  const c = android.commands.find(x => x.name === $("androidCatalog").value);
-  if (!androidDevice) return toast("choose a device");
-  const args = {};
-  $("androidParams").querySelectorAll("[data-key]").forEach(el => args[el.dataset.key] = el.dataset.type === "bool" ? (el.checked ? "1" : "") : el.value);
-  const shown = Object.entries(args).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(", ");
-  if (c.danger && !confirm(`${c.title}${shown ? " (" + shown + ")" : ""} on ${androidDevice}?`)) return;
-  try { await call("api/android/command", {serial: androidDevice, name: c.name, args}); toast(`${c.title}: sent`); }
+async function saveSet() {
+  const p = cur(), actions = formActions(false);
+  if (!actions.length) return toast("choose the settings first");
+  const v = await ask(`Save ${actions.length} action${actions.length > 1 ? "s" : ""} as a set of ${view === "ios" ? "iOS" : "Android"}. A set of the same name is replaced. Passwords are never stored.`, [{key: "name", label: "name", value: p.setName}], "Save");
+  if (v === null) return;
+  try { await call("api/sets/save", {platform: view, name: v.name, actions}); p.setName = v.name.trim(); toast(`set "${p.setName}" saved`); await refreshSets(); buildPresetForm(); }
   catch (e) { toast("error: " + e.message, 8000); }
-  refreshAndroid(); setTimeout(refreshAndroidLog, 3000);
+}
+
+function loadSet(s) {
+  const p = P[s.platform]; p.form = {}; p.params = {}; p.extra = []; p.setName = s.name;
+  for (const a of s.actions) {
+    if (a.kind === "preset") { p.form[a.name] = a.on ? "on" : "off"; if (a.params) p.params[a.name] = {...a.params}; }
+    else p.extra.push({...a});
+  }
+  showTab("settings"); buildPresetForm();
+}
+
+function renderSets() {
+  const box = $("sets"); box.innerHTML = "";
+  const list = sets.filter(s => s.platform === view);
+  if (!list.length) box.append(el("div", {class: "empty", text: "no saved set yet: choose the settings in Settings, then Save as set"}));
+  for (const s of list) {
+    const apply = el("button", {class: "primary small set-apply", text: "Apply", onclick: () => runActions(s.actions.map(a => ({...a, params: a.params ? {...a.params} : undefined})), `Set "${s.name}"`)});
+    apply.disabled = !targets().length;
+    box.append(el("div", {class: "set"},
+      el("div", {class: "row"}, el("span", {class: "name", text: s.name}), el("span", {class: "muted", text: `${s.actions.length} action${s.actions.length > 1 ? "s" : ""}, saved ${time(s.updated_at)}`}), el("span", {class: "spacer"}),
+        apply,
+        el("button", {class: "small", text: "Edit", title: "load it into Settings", onclick: () => loadSet(s)}),
+        el("button", {class: "small danger", text: "Delete", onclick: async () => {
+          if (await ask(`Delete the set "${s.name}"?`, [], "Delete") === null) return;
+          try { await call("api/sets/delete", {platform: s.platform, name: s.name}); refreshSets(); } catch (e) { toast("error: " + e.message); }
+        }})),
+      el("div", {class: "muted", style: "white-space:pre-line", text: describe(s.actions)})));
+  }
+}
+
+/* ---------- commands ---------- */
+
+function buildCatalog() {
+  const p = cur(), sel = $("catalog"); sel.innerHTML = ""; $("quick").innerHTML = "";
+  const groups = {};
+  for (const c of p.commands) (groups[c.group] ||= []).push(c);
+  for (const [g, items] of Object.entries(groups)) {
+    const og = el("optgroup", {label: g});
+    for (const c of items) og.append(el("option", {value: view === "ios" ? c.type : c.name, title: c.hint || "",
+      text: (view === "ios" ? c.type + (c.supervised ? "  [S]" : "") : c.title) + (c.danger ? "  (!)" : "")}));
+    sel.append(og);
+  }
+  for (const q of QUICK[view]) {
+    const c = p.commands.find(x => (view === "ios" ? x.type : x.name) === q); if (!c) continue;
+    $("quick").append(el("button", {class: "small", text: view === "ios" ? c.type : c.title, title: c.hint || "", onclick: () => chooseCommand(q)}));
+  }
+  chooseCommand(localStorage.getItem("cmd-" + view) || QUICK[view][0]);
+}
+
+function chooseCommand(name) {
+  const p = cur();
+  const c = p.commands.find(x => (view === "ios" ? x.type : x.name) === name) || p.commands[0];
+  if (!c) return;
+  const key = view === "ios" ? c.type : c.name;
+  $("catalog").value = key; localStorage.setItem("cmd-" + view, key);
+  $("cmdHint").textContent = c.hint || "";
+  $("cmdNote").textContent = [c.supervised ? "supervised only" : "", c.danger ? "changes the devices: asks first" : ""].filter(Boolean).join(" - ");
+  $("cmdArgsIOS").style.display = view === "ios" ? "" : "none";
+  $("cmdArgsAndroid").style.display = view === "android" ? "" : "none";
+  if (view === "ios") { $("args").value = JSON.stringify(c.args, null, 2); return; }
+  const box = $("cmdArgsAndroid"); box.innerHTML = "";
+  for (const prm of c.params || []) {
+    let input;
+    if (prm.type === "select") { input = el("select"); for (const o of prm.options) input.append(el("option", {text: o})); }
+    else if (prm.type === "bool") input = el("input", {type: "checkbox"});
+    else if (prm.type === "json" || prm.key === "command") input = el("textarea", {rows: prm.type === "json" ? 3 : 2, spellcheck: "false"});
+    else input = el("input", {type: "text", autocomplete: "off"});
+    if (prm.default && prm.type !== "bool") input.value = prm.default;
+    if (prm.hint) { input.placeholder = prm.hint; input.title = prm.hint; }
+    input.dataset.key = prm.key; input.dataset.type = prm.type;
+    const caption = el("span", {text: prm.title + (prm.required ? " *" : "")});
+    box.append(prm.type === "bool" ? el("label", {class: "check"}, input, caption) : el("label", {}, caption, input));
+  }
+}
+
+function commandAction() {
+  const name = $("catalog").value;
+  if (view === "ios") {
+    let args;
+    try { args = JSON.parse($("args").value || "{}"); } catch (e) { toast("the arguments are not JSON: " + e.message); return null; }
+    return {kind: "command", name, args};
+  }
+  const params = {};
+  $("cmdArgsAndroid").querySelectorAll("[data-key]").forEach(i => { const v = i.dataset.type === "bool" ? (i.checked ? "1" : "") : i.value; if (v) params[i.dataset.key] = v; });
+  return {kind: "command", name, params};
+}
+
+/* ---------- activity ---------- */
+
+function showActivity(tab) {
+  localStorage.setItem("activity", tab);
+  document.querySelectorAll("#activityTabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  for (const t of ["jobs", "history", "events"]) $("tab-" + t).style.display = t === tab ? "" : "none";
+}
+
+function showTab(tab) {
+  localStorage.setItem("tab-" + view, tab);
+  document.querySelectorAll("#actionTabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  for (const t of ["settings", "commands", "sets"]) $("tab-" + t).style.display = t === tab ? "" : "none";
+}
+
+function deviceName(platform, id) { const d = P[platform].devices.find(x => x.id === id); return d && d.name ? d.name : short(id); }
+
+function renderJobs() {
+  const box = $("jobs"); box.innerHTML = "";
+  const list = jobsList.filter(j => j.platform === view);
+  if (!list.length) box.append(el("div", {class: "empty", text: "no job yet"}));
+  for (const j of list.slice(0, 20)) {
+    const c = {ok: 0, queued: 0, error: 0, running: 0, waiting: 0};
+    for (const t of j.targets) c[t.status] = (c[t.status] || 0) + 1;
+    const n = j.targets.length;
+    const bar = el("span", {class: "bar"}, ...[["ok", "#16a34a"], ["queued", "#f59e0b"], ["error", "#dc2626"], ["running", "#93c5fd"]].map(([k, color]) => el("span", {style: `width:${100 * c[k] / n}%; background:${color}`})));
+    const counts = Object.entries(c).filter(([, v]) => v).map(([k, v]) => el("span", {class: k, text: `${k} ${v}`}));
+    const det = el("details", {class: "job"});
+    det.open = openJobs.has(j.id);
+    det.ontoggle = () => det.open ? openJobs.add(j.id) : openJobs.delete(j.id);
+    det.append(el("summary", {}, el("b", {text: j.title}), el("span", {class: "muted", text: `${time(j.created_at)} - ${n} device${n > 1 ? "s" : ""}`}), bar, ...counts,
+      el("span", {class: "muted", text: j.finished_at ? "finished" : "running..."})));
+    const table = el("table", {}, el("thead", {}, el("tr", {}, el("th", {text: "Device"}), el("th", {text: "Status"}), el("th", {text: "Steps"}))));
+    const body = el("tbody");
+    for (const t of j.targets) {
+      const steps = el("div");
+      for (const s of t.steps) {
+        const line = el("div", {class: "item"}, el("span", {class: s.status, text: s.status}), el("span", {text: s.title}));
+        if (s.output) line.append(el("span", {class: "muted", style: "white-space:pre-line", text: s.output}));
+        if (s.uuid) line.append(el("button", {class: "small", text: "report", onclick: () => { focusCommand = s.uuid; renderDetails(); $("details").scrollIntoView({behavior: "smooth"}); }}));
+        steps.append(line);
+      }
+      body.append(el("tr", {}, el("td", {}, ...(P[j.platform].devices.some(d => d.id === t.device && d.name) ? [el("div", {text: deviceName(j.platform, t.device)})] : []), el("div", {class: "muted udid", text: t.device})), el("td", {class: t.status, text: t.status}), el("td", {}, steps)));
+    }
+    table.append(body); det.append(table);
+    box.append(det);
+  }
+}
+
+function renderHistory() {
+  const body = $("history"), head = $("historyHead"); body.innerHTML = "";
+  const only = $("historySelected").checked, sel = cur().selected;
+  if (view === "ios") {
+    head.replaceChildren(el("tr", {}, ...["Sent", "Command", "Status", "Answered", "Device"].map(t => el("th", {text: t}))));
+    $("historyLegend").textContent = "Queued: waits for the device (Push wakes it up) - NotNow: busy or locked, retried - Cleared: never delivered, the device enrolled again";
+    for (const c of (P.ios.raw && P.ios.raw.commands) || []) {
+      if (only && !sel.has(c.udid)) continue;
+      const tr = el("tr", {class: "click" + (c.uuid === focusCommand ? " checked" : "")},
+        el("td", {class: "nowrap", text: time(c.sent_at)}), el("td", {text: c.type}), el("td", {class: c.status, text: c.status}),
+        el("td", {class: "nowrap", text: time(c.answered_at)}), el("td", {text: deviceName("ios", c.udid)}));
+      tr.onclick = () => { focusCommand = c.uuid; renderHistory(); renderDetails(); };
+      body.append(tr);
+    }
+    return;
+  }
+  head.replaceChildren(el("tr", {}, ...["Sent", "Command", "Status", "Payload", "Device"].map(t => el("th", {text: t}))));
+  $("historyLegend").textContent = "delivered: the log of the focused device has it - sent: not seen yet - error: Headwind MDM refused it";
+  for (const h of (P.android.raw && P.android.raw.history) || []) {
+    if (only && !sel.has(h.serial)) continue;
+    const st = delivered(h);
+    body.append(el("tr", {title: h.error || h.payload || ""}, el("td", {class: "nowrap", text: time(h.at)}), el("td", {text: commandTitle(h.name) + (h.name === "raw" ? " " + h.push : "")}),
+      el("td", {class: {delivered: "Acknowledged", sent: "Queued", error: "Error"}[st] || "", text: st}), el("td", {class: "msg", text: h.error || h.payload || ""}), el("td", {text: deviceName("android", h.serial)})));
+  }
 }
 
 function delivered(h) {
   if (h.error) return "error";
-  if (h.serial !== androidDevice) return "";
+  if (h.serial !== P.android.focus) return "";
   const at = Date.parse(h.at) - 2000;
-  return androidLog.some(r => r.createTime >= at && r.message === "Got Push Message, type " + h.push) ? "delivered" : "sent";
+  return P.android.log.some(r => r.createTime >= at && r.message === "Got Push Message, type " + h.push) ? "delivered" : "sent";
 }
 
-function renderAndroidHistory() {
-  const body = $("androidHistory"); body.innerHTML = "";
-  const title = (n) => (android.commands.find(c => c.name === n) || {}).title || n;
-  for (const h of android.history || []) {
-    const tr = document.createElement("tr");
-    const st = delivered(h);
-    tr.append(cell(new Date(h.at).toLocaleTimeString()), cell(title(h.name) + (h.name === "raw" ? " " + h.push : "")),
-      cell(st, {delivered: "Acknowledged", sent: "Queued", error: "Error"}[st]), cell(h.error || h.payload || ""), cell(h.serial, "udid"));
-    tr.title = h.error || h.payload || "";
-    tr.onclick = () => selectAndroid(h.serial);
-    body.appendChild(tr);
+function renderEvents() {
+  const body = $("events"), f = $("eventsFilter").value.toLowerCase(); body.innerHTML = "";
+  if (view === "ios") {
+    $("eventsTab").textContent = "Device events";
+    $("eventsHead").replaceChildren(el("tr", {}, ...["Time", "Event", "Device"].map(t => el("th", {text: t}))));
+    $("eventsLegend").textContent = "Authenticate / TokenUpdate: enrollment - Connect Idle: connected, took its queue - CheckOut: the MDM profile was removed - DeclarativeManagement: DDM sync";
+    $("eventsSeen").textContent = "";
+    for (const e of ((P.ios.raw && P.ios.raw.events) || []).slice(0, 300)) {
+      const name = deviceName("ios", e.udid);
+      if (f && !(e.event + " " + name + " " + e.udid).toLowerCase().includes(f)) continue;
+      body.append(el("tr", {title: e.detail ? JSON.stringify(e.detail) : ""}, el("td", {class: "nowrap", text: time(e.at)}), el("td", {class: e.event.split(" ")[1] || "", text: e.event}), el("td", {text: name})));
+    }
+    return;
   }
-}
-
-function renderAndroidLog() {
-  const body = $("androidLog"); body.innerHTML = "";
-  const f = $("androidLogFilter").value.toLowerCase();
-  for (const r of androidLog) {
+  $("eventsTab").textContent = "Device log";
+  $("eventsHead").replaceChildren(el("tr", {}, ...["Time", "Level", "Message"].map(t => el("th", {text: t}))));
+  $("eventsLegend").textContent = P.android.focus ? `the log of ${deviceName("android", P.android.focus)} (the agent writes what it did)` : "click a device to see its log";
+  for (const r of P.android.log) {
     if (f && !r.message.toLowerCase().includes(f)) continue;
-    const tr = document.createElement("tr");
-    tr.append(cell(new Date(r.createTime).toLocaleTimeString()), cell(r.severity, "sev-" + r.severity), cell(r.message, "msg"));
-    body.appendChild(tr);
+    body.append(el("tr", {}, el("td", {class: "nowrap", text: time(r.createTime)}), el("td", {class: "sev-" + r.severity, text: r.severity}), el("td", {class: "msg", text: r.message})));
   }
 }
 
-function renderAndroid() {
-  if (!android) return;
-  $("androidServer").textContent = !android.enabled ? "off (HMDM_URL)" : android.server + (android.error ? " - ERROR: " + android.error : "");
-  $("androidAgent").textContent = android.agent_url || "no APK (MDM_ANDROID_AGENT_APK)";
-  $("androidTarget").textContent = androidDevice || "none";
-  const d = (android.devices || []).find(x => x.serial === androidDevice);
-  $("androidDevice").textContent = d ? JSON.stringify(d, null, 2) : "-";
-  renderAndroidDevices(); renderAndroidPresets(); renderAndroidHistory(); renderAndroidLog();
+function renderDetails() {
+  const p = cur();
+  document.querySelectorAll(".android-only").forEach(e => e.style.display = view === "android" && p.focus ? "" : "none");
+  if (view === "ios" && focusCommand) {
+    const c = ((P.ios.raw && P.ios.raw.commands) || []).find(x => x.uuid === focusCommand);
+    if (c) {
+      $("detailsTitle").textContent = `${c.type} - ${c.status} - ${deviceName("ios", c.udid)} - ${c.uuid}`;
+      $("detailsBody").textContent = JSON.stringify({args: c.args, report: c.report ?? "(no report yet)"}, null, 2);
+      return;
+    }
+  }
+  const d = p.devices.find(x => x.id === p.focus);
+  $("detailsTitle").textContent = d ? (d.name || d.id) : "click a device or a command";
+  $("detailsBody").textContent = d ? JSON.stringify(d.raw, null, 2) : "-";
+}
+
+/* ---------- data ---------- */
+
+async function refreshIOS() {
+  try {
+    const st = await call("api/state"); P.ios.raw = st;
+    P.ios.devices = iosRows(st);
+    $("topic").textContent = st.server.topic || "no push certificate";
+    $("pushExp").textContent = st.server.push_not_after || "-";
+    $("mdmUrl").textContent = st.server.mdm_url; $("enrollUrl").textContent = st.server.enroll_url;
+    $("refresh").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) { $("refresh").textContent = "error: " + e.message; }
 }
 
 async function refreshAndroid() {
-  try { android = await call("api/android"); } catch (e) { $("androidServer").textContent = "error: " + e.message; return; }
-  if (android.enabled && !$("androidCatalog").options.length) buildAndroidCatalog();
-  const devices = android.devices || [];
-  if (devices.length && !devices.some(d => d.serial === androidDevice)) { selectAndroid(devices[0].serial); return; }
-  renderAndroid();
+  try {
+    const a = await call("api/android"); P.android.raw = a;
+    if (a.enabled) { P.android.presets = a.presets; P.android.commands = a.commands; }
+    P.android.devices = androidRows(a);
+    $("androidServer").textContent = !a.enabled ? "off (HMDM_URL)" : a.server + (a.error ? " - ERROR: " + a.error : "");
+    $("androidAgent").textContent = a.agent_url || "no APK (MDM_ANDROID_AGENT_APK)";
+  } catch (e) { $("androidServer").textContent = "error: " + e.message; }
 }
 
 async function refreshAndroidLog() {
-  if (!androidDevice || !android || !android.enabled) return;
-  try { androidLog = await call("api/android/log?serial=" + encodeURIComponent(androidDevice)); $("androidLogSeen").textContent = "updated " + new Date().toLocaleTimeString(); }
-  catch (e) { $("androidLogSeen").textContent = "error: " + e.message; }
-  renderAndroidHistory(); renderAndroidLog();
+  const s = P.android.focus;
+  if (!s || !P.android.raw || !P.android.raw.enabled) { P.android.log = []; return; }
+  try { P.android.log = await call("api/android/log?serial=" + encodeURIComponent(s)); $("eventsSeen").textContent = "updated " + new Date().toLocaleTimeString(); }
+  catch (e) { $("eventsSeen").textContent = "error: " + e.message; }
+  if (view === "android") { renderEvents(); renderHistory(); }
 }
 
-function buildAndroidCatalog() {
-  const groups = {};
-  for (const c of android.commands) (groups[c.group] ||= []).push(c);
-  for (const [g, items] of Object.entries(groups)) {
-    const og = document.createElement("optgroup"); og.label = g;
-    for (const c of items) { const o = document.createElement("option"); o.value = c.name; o.title = c.hint; o.textContent = c.title + (c.danger ? "  (!)" : ""); og.appendChild(o); }
-    $("androidCatalog").appendChild(og);
+async function refreshJobs() { try { jobsList = await call("api/jobs"); } catch (e) { return; } if (view !== "server") renderJobs(); }
+async function refreshSets() { try { sets = await call("api/sets"); } catch (e) { return; } if (view !== "server") renderSets(); }
+
+function headerInfo() {
+  const box = $("headerInfo"); box.innerHTML = "";
+  if (view === "ios" && P.ios.raw) {
+    const exp = P.ios.raw.server.push_not_after, days = exp ? (Date.parse(exp) - Date.now()) / 864e5 : -1;
+    box.append(el("span", {class: days < 30 ? "warn" : ""}, "Push certificate ", el("b", {text: exp ? `until ${exp.slice(0, 10)}` : "missing: Server"})));
   }
-  for (const q of ANDROID_QUICK) {
-    const c = android.commands.find(x => x.name === q); if (!c) continue;
-    const b = document.createElement("button"); b.textContent = c.title; b.title = c.hint; b.onclick = () => chooseAndroidCommand(q);
-    $("androidQuick").appendChild(b);
+  if (view === "android" && P.android.raw) box.append(el("span", {}, "Headwind MDM ", el("b", {text: P.android.raw.enabled ? (P.android.raw.error ? "ERROR" : "ok") : "off"})));
+}
+
+function renderAll() {
+  headerInfo();
+  if (view === "server") return renderServer();
+  renderDevices(); renderJobs(); renderHistory(); renderEvents(); renderDetails(); renderSets();
+}
+
+function renderServer() {
+  const sel = $("rawDevice"), was = sel.value; sel.innerHTML = "";
+  for (const d of P.ios.devices) sel.append(el("option", {value: d.id, text: d.name ? `${d.name} (${short(d.id)})` : d.id}));
+  if (was) sel.value = was;
+}
+
+function showView(v) {
+  if (!["ios", "android", "server"].includes(v)) v = "ios";
+  view = v; localStorage.setItem("view", v); history.replaceState(null, "", "#" + v);
+  document.querySelectorAll("header nav button").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+  $("platform").style.display = v === "server" ? "none" : "";
+  $("server").style.display = v === "server" ? "" : "none";
+  document.querySelectorAll(".ios-only").forEach(e => e.style.display = v === "ios" ? "" : "none");
+  if (v !== "server") {
+    $("filter").value = localStorage.getItem("filter-" + v) || "";
+    buildCatalog(); buildPresetForm(); showTab(localStorage.getItem("tab-" + v) || "settings");
+    if (v === "android") refreshAndroidLog();
   }
-  $("androidCatalog").onchange = () => chooseAndroidCommand($("androidCatalog").value);
-  chooseAndroidCommand("sync");
+  renderAll();
+}
+
+async function tick() {
+  if (view === "ios" || view === "server") await refreshIOS();
+  if (view === "android") await refreshAndroid();
+  await refreshJobs();
+  if (view === "ios") { renderDevices(); renderHistory(); renderEvents(); renderDetails(); headerInfo(); }
+  if (view === "android") { renderDevices(); renderHistory(); renderDetails(); headerInfo(); }
+  if (view === "server") renderServer();
 }
 
 async function init() {
-  catalog = await call("api/catalog");
-  presets = await call("api/presets");
-  buildPresets();
-  const groups = {};
-  for (const c of catalog) (groups[c.group] ||= []).push(c);
-  for (const [g, items] of Object.entries(groups)) {
-    const og = document.createElement("optgroup"); og.label = g;
-    for (const c of items) { const o = document.createElement("option"); o.value = c.type; o.title = c.hint || ""; o.textContent = c.type + (c.supervised ? "  [S]" : "") + (c.danger ? "  (!)" : ""); og.appendChild(o); }
-    $("catalog").appendChild(og);
-  }
-  for (const q of QUICK) { const b = document.createElement("button"); b.textContent = q; b.title = (catalog.find(x => x.type === q) || {}).hint || ""; b.onclick = () => chooseCommand(q); $("quick").appendChild(b); }
+  P.ios.commands = await call("api/catalog");
+  P.ios.presets = await call("api/presets");
+  loadSelection("ios"); loadSelection("android");
+  await Promise.all([refreshIOS(), refreshAndroid(), refreshSets(), refreshJobs()]);
+
+  $("filter").oninput = () => { localStorage.setItem("filter-" + view, $("filter").value); renderDevices(); };
+  $("selAll").onclick = () => selectRows(() => true);
+  $("selNone").onclick = () => selectRows(() => false);
+  $("selInvert").onclick = () => selectRows(d => !cur().selected.has(d.id));
+  $("selProblems").onclick = () => selectRows(d => d.problem);
+  $("checkAll").onclick = () => selectRows(() => $("checkAll").checked);
+  document.querySelectorAll("#actionTabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+  document.querySelectorAll("#activityTabs button").forEach(b => b.onclick = () => showActivity(b.dataset.tab));
+  showActivity(localStorage.getItem("activity") || "jobs");
+  $("historySelected").onchange = renderHistory;
+  $("eventsFilter").oninput = renderEvents;
+
+  $("formApply").onclick = () => runActions(formActions(), cur().setName ? `Set "${cur().setName}"` : "");
+  $("formSave").onclick = saveSet;
+  $("formClear").onclick = () => { const p = cur(); p.form = {}; p.params = {}; p.extra = []; p.setName = ""; buildPresetForm(); };
   $("catalog").onchange = () => chooseCommand($("catalog").value);
-  chooseCommand("DeviceInformation");
-  $("send").onclick = doSend;
-  $("push").onclick = () => selectedDevice && doPush(selectedDevice);
+  $("cmdSend").onclick = () => { const a = commandAction(); if (a) runActions([a]); };
+  $("cmdAdd").onclick = () => { const a = commandAction(); if (!a) return; cur().extra.push(a); renderFormCommands(); renderCounters(); toast(`${commandTitle(a.name)} added to the set (Settings)`); };
+  $("cmdPush").onclick = () => runActions([{kind: "push"}]);
   $("dataFile").onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    const b64 = await fileToBase64(f);
+    const b64 = await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.onerror = fail; r.readAsDataURL(f); });
     const text = $("args").value;
     if (!text.includes('"$data": ""')) return toast('no empty {"$data": ""} in the arguments');
     $("args").value = text.replace('"$data": ""', `"$data": "${b64}"`);
     toast(`${f.name}: ${f.size} bytes inserted`); e.target.value = "";
   };
-  for (const [label] of RAW_PRESETS) { const o = document.createElement("option"); o.textContent = label; $("rawPreset").appendChild(o); }
-  const preset = () => { const p = RAW_PRESETS[$("rawPreset").selectedIndex]; $("rawMethod").value = p[1]; $("rawPath").value = "/" + p[2]; $("rawBody").value = p[3]; $("rawHint").textContent = p[4] || ""; };
-  $("rawPreset").onchange = preset; preset();
+
+  $("androidDelete").onclick = async () => {
+    const s = P.android.focus; if (!s) return;
+    if (await ask(`Delete ${deviceName("android", s)} (${s}) and its configuration from Headwind MDM? Release it first: a deleted device keeps its device owner.`, [], "Delete") === null) return;
+    try { await call("api/android/delete", {serial: s}); toast("deleted"); setFocus(""); } catch (e) { toast("error: " + e.message, 8000); }
+    tick();
+  };
+
+  for (const [label] of RAW_PRESETS) $("rawPreset").append(el("option", {text: label}));
+  const rawPreset = () => { const p = RAW_PRESETS[$("rawPreset").selectedIndex]; $("rawMethod").value = p[1]; $("rawPath").value = "/" + p[2]; $("rawBody").value = p[3]; $("rawHint").textContent = p[4] || ""; };
+  $("rawPreset").onchange = rawPreset; rawPreset();
   $("rawSend").onclick = async () => {
     try {
-      const r = await call("api/raw", {method: $("rawMethod").value, path: $("rawPath").value.replaceAll("{udid}", selectedDevice), body: $("rawBody").value});
+      const r = await call("api/raw", {method: $("rawMethod").value, path: $("rawPath").value.replaceAll("{udid}", $("rawDevice").value), body: $("rawBody").value});
       let out = r.response; try { out = JSON.stringify(JSON.parse(out), null, 2); } catch (e) {}
       $("rawOut").textContent = `HTTP ${r.status}\n${out}`;
     } catch (e) { $("rawOut").textContent = "error: " + e.message; }
   };
-  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
-    document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
-    $("tab-raw").style.display = b.dataset.tab === "raw" ? "" : "none"; $("tab-cert").style.display = b.dataset.tab === "cert" ? "" : "none";
-  });
   $("certSend").onclick = async () => {
     const c = $("certFile").files[0], k = $("keyFile").files[0];
     if (!c || !k) return toast("choose the certificate and its private key");
-    try { const r = await call("api/pushcert", {pem: (await c.text()) + "\n" + (await k.text())}); $("certOut").textContent = `topic ${r.topic}, until ${r.not_after}`; refresh(); }
+    try { const r = await call("api/pushcert", {pem: (await c.text()) + "\n" + (await k.text())}); $("certOut").textContent = `topic ${r.topic}, until ${r.not_after}`; refreshIOS(); }
     catch (e) { $("certOut").textContent = "error: " + e.message; }
   };
   $("androidEnroll").onclick = async () => {
     try {
       const r = await call("api/android/enroll", {serial: $("androidSerial").value.trim(), name: $("androidName").value.trim()});
       $("androidSetup").style.display = "";
-      $("androidSetup").textContent = "# on the host of the device (the server and the device are ready):\nandroid/enroll.sh " + r.serial +
-        "\n# or by hand, with the agent APK:\n" + r.adb.join("\n");
-      selectAndroid(r.serial); refreshAndroid();
+      $("androidSetup").textContent = "# on the host of the device:\nzebrunner-farm mdm enroll " + r.serial + "\n# or by hand, with the agent APK:\n" + r.adb.join("\n");
+      refreshAndroid();
     } catch (e) { toast("error: " + e.message, 8000); }
   };
-  $("androidSend").onclick = sendAndroid;
-  $("androidLogFilter").oninput = renderAndroidLog;
-  $("androidDelete").onclick = async () => {
-    if (!androidDevice) return toast("choose a device");
-    if (!confirm(`Delete ${androidDevice} and its configuration from Headwind MDM? Release it first: a deleted device keeps its device owner.`)) return;
-    try { await call("api/android/delete", {serial: androidDevice}); toast("deleted"); selectAndroid(""); } catch (e) { toast("error: " + e.message, 8000); }
-    refreshAndroid();
-  };
+
   document.querySelectorAll("header nav button").forEach(b => b.onclick = () => showView(b.dataset.view));
-  showView(location.hash.slice(1) || localStorage.getItem("view") || "ios");
   window.onhashchange = () => showView(location.hash.slice(1));
-  await refresh();
-  setInterval(refresh, 2000);
-  await refreshAndroid();
-  await refreshAndroidLog();
-  // the Android tab polls Headwind MDM only while it is shown
-  setInterval(() => { if (localStorage.getItem("view") === "android") { refreshAndroid(); refreshAndroidLog(); } }, 5000);
+  showView(location.hash.slice(1) || localStorage.getItem("view") || "ios");
+  setInterval(tick, 3000);
+  setInterval(() => { if (view === "android") refreshAndroidLog(); }, 6000);
 }
 init();
 </script>
