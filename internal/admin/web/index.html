@@ -209,13 +209,13 @@
     <pre id="certOut">-</pre>
     <h2 style="margin-top:16px">iOS: enrollment</h2>
     <div class="muted">MDM <span class="udid" id="mdmUrl">-</span></div>
-    <div class="hint">A supervised device is enrolled over USB by the agent of its host (<code>zebrunner-farm mdm enroll &lt;device&gt;</code>) with the profile of <code id="enrollUrl">/mdm/enroll</code> (a one-time SCEP challenge per profile). The agent also recovers a device that lost MDM and turns Developer Mode on: neither has an MDM command.</div>
+    <div class="hint">An iOS device is erased and supervised by the agent of its host (<code>./zebrunner.sh mdm supervise &lt;device&gt;</code>), a supervised one enrolled over USB (<code>./zebrunner.sh mdm enroll &lt;device&gt;</code>) with the profile of <code id="enrollUrl">/mdm/enroll</code> (a one-time SCEP challenge per profile). The agent also recovers a device that lost MDM and turns Developer Mode on: neither has an MDM command.</div>
   </section>
   <section>
     <h2>Android: Headwind MDM</h2>
     <div class="row"><span class="muted">Server</span> <b class="udid" id="androidServer">-</b></div>
     <div class="row"><span class="muted">Agent APK</span> <b class="udid" id="androidAgent">-</b></div>
-    <div class="hint">The agent is the device owner, set over adb by <code>zebrunner-farm mdm enroll &lt;device&gt;</code> on the host of the device: no factory reset, no account (Google) on the device. It keeps the system launcher, grants no permission and installs nothing by itself, always forbids safe mode. adb alone cannot remove it: the command Release the device or <code>zebrunner-farm mdm release</code>.</div>
+    <div class="hint">The agent is the device owner, set over adb by <code>./zebrunner.sh mdm enroll &lt;device&gt;</code> on the host of the device: no factory reset, no account (Google) on the device. It keeps the system launcher, grants no permission and installs nothing by itself, always forbids safe mode. adb alone cannot remove it: the command Release the device or <code>./zebrunner.sh mdm release</code>.</div>
     <h3>Manual enrollment</h3>
     <div class="row">
       <input type="text" id="androidSerial" placeholder="adb serial" style="width:160px">
@@ -1015,7 +1015,7 @@ async function init() {
     try {
       const r = await call("api/android/enroll", {serial: $("androidSerial").value.trim(), name: $("androidName").value.trim()});
       $("androidSetup").style.display = "";
-      $("androidSetup").textContent = "# on the host of the device:\nzebrunner-farm mdm enroll " + r.serial + "\n# or by hand, with the agent APK:\n" + r.adb.join("\n");
+      $("androidSetup").textContent = "# on the host of the device, in the folder of mcloud-agent:\n./zebrunner.sh mdm enroll " + r.serial + "\n# or by hand, with the agent APK:\n" + r.adb.join("\n");
       refreshAndroid();
     } catch (e) { toast("error: " + e.message, 8000); }
   };

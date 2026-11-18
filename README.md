@@ -237,10 +237,10 @@ The API of the nodes (the device listener, `Authorization: Bearer <MDM_ENROLL_TO
 | `GET /android/status?serial=<serial>` | `known`, `device_owner`, `last_sync_at`, `agent_version`, `model`, `os_version`, `managed`, `presets`: Headwind MDM, the device is not touched |
 | `GET /android/release` | the `adb shell` command of the release without the server |
 
-mcloud-agent (zebrunner/mcloud-agent): `zebrunner-farm mdm <enroll|release|status> <udid>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. `status` asks the server only. `enroll` and `release` take the lock of the device, stop its containers (if it has any: a new device has none yet), run a one-shot container of the image of its connector (`docker run --rm --entrypoint ...` with the USB device and the volumes of the connector: `mcloud-key-volume` of adb, `<device>-lockdown` of the pairing), then start its containers again:
+mcloud-agent (zebrunner/mcloud-agent): `./zebrunner.sh mdm <status|enroll|release|supervise> <devices>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. `status` asks the server only. `enroll` and `release` take the lock of the device, stop its containers (if it has any: a new device has none yet), run a one-shot container of the image of its connector (`docker run --rm --entrypoint ...` with the USB device and the volumes of the connector: `mcloud-key-volume` of adb, `<device>-lockdown` of the pairing), then start its containers again:
 
 - Android (adb): `GET /android/agent.apk` into the connector, `GET /android/enroll?serial=<udid>&name=<name>&format=shell` (the `adb shell` command of the setup), `adb install -r`, `dpm set-device-owner com.hmdm.launcher/.AdminReceiver`, the setup, `am start`; the release: `GET /android/release` (its `adb shell` command). `android/enroll.sh` and `android/release.sh` are the reference.
-- iOS (go-ios, `/var/lib/lockdown` of the connector): `GET /mdm/enroll?udid=<udid>` (a profile with a one-time challenge), `ios profile add --p12file=<supervision identity>`; `ios pair --p12file` after a lost pairing; `ios devmode enable`.
+- iOS (go-ios, `/var/lib/lockdown` of the connector): `GET /mdm/enroll?udid=<udid>&name=<name>` (a profile with a one-time challenge), `ios profile add --p12file=<supervision identity>`; `ios pair --p12file` after a lost pairing. `supervise`: `ios erase`, `ios activate`, `ios prepare` with the certificate of the identity and every skip key, `ios devmode enable`, the Wi-Fi profile of the farm, then the enrollment; WebDriverAgent of the connector continues the Setup Assistant of iOS 26.
 - later: the udev and systemd hook of a connected device enrolls a device that is not enrolled.
 
 ## Keys and certificates
@@ -313,8 +313,8 @@ Per farm (a test farm first):
 4. `./zebrunner.sh start`; the checks: from another address `/mdm`, `/hmdm/...` and 31443 refuse; from the site `/android/agent.apk` answers, `openssl s_client -connect <farm>:31443` verifies; `/hmdm/` (the web panel) answers 404; the admin UI answers through the ssh tunnel (`/mcloud/mdm/` asks for the sign-in of STF when it is published).
 5. The admin UI, iOS: the push certificate.
 6. The supervision identity of the farm on its nodes ([Supervision identity](#supervision-identity)).
-7. Android: the accounts (Google) off the devices, `zebrunner-farm mdm enroll <udid>`; the admin UI shows the device owner and a fresh sync.
-8. iOS: the supervision erases the device (a window agreed with the users), then `zebrunner-farm mdm enroll <udid>`.
+7. Android: the accounts (Google) off the devices, `./zebrunner.sh mdm enroll <devices>` of mcloud-agent; the admin UI shows the device owner and a fresh sync.
+8. iOS: `./zebrunner.sh mdm supervise <devices>` of mcloud-agent erases, supervises and enrolls the devices (a window agreed with the users; `MDM_WIFI_SSID` of the hosts).
 9. The presets (the delay of the updates, no factory reset, ...).
 10. The backups: the volumes of MySQL, PostgreSQL and `/data` of mcloud-mdm (its SCEP CA: without it every iOS device enrolls again).
 
