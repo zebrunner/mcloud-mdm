@@ -15,10 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zebrunner/mcloud-mdm/internal/android"
 	"github.com/zebrunner/mcloud-mdm/internal/config"
 	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
 	"github.com/zebrunner/mcloud-mdm/internal/profile"
 	"github.com/zebrunner/mcloud-mdm/internal/state"
+	"github.com/zebrunner/mcloud-mdm/internal/stf"
 )
 
 //go:embed web/index.html web/catalog.json
@@ -30,10 +32,16 @@ type Server struct {
 	NanoHUB *nanohub.Client
 	State   *state.Store
 	Log     *slog.Logger
+	// Android is nil without Headwind MDM
+	Android *android.Manager
+	// STF is nil without MDM_STF_URL: no groups, no jobs waiting for free devices
+	STF *stf.Client
 	// AnswerTimeout bounds the wait for the report of a command of a ready profile
 	AnswerTimeout time.Duration
 	// RefreshDelay is the wait after a new enrollment before its DDM notify and ProfileList
 	RefreshDelay time.Duration
+
+	jobs jobs
 }
 
 // Handler routes the UI, the API and the webhook.
@@ -49,6 +57,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/preset/remove", s.browser(s.presetRemove))
 	mux.HandleFunc("POST /api/pushcert", s.browser(s.pushCert))
 	mux.HandleFunc("POST /api/raw", s.browser(s.raw))
+	mux.HandleFunc("GET /api/android", s.androidView)
+	mux.HandleFunc("POST /api/android/enroll", s.browser(s.androidEnroll))
+	mux.HandleFunc("POST /api/android/preset", s.browser(s.androidPreset))
+	mux.HandleFunc("POST /api/android/command", s.browser(s.androidCommand))
+	mux.HandleFunc("POST /api/android/delete", s.browser(s.androidDelete))
+	mux.HandleFunc("GET /api/android/log", s.androidLog)
+	mux.HandleFunc("GET /api/jobs", s.jobsView)
+	mux.HandleFunc("POST /api/jobs", s.browser(s.jobStart))
+	mux.HandleFunc("POST /api/jobs/cancel", s.browser(s.jobCancel))
+	mux.HandleFunc("GET /api/sets", s.setsAll)
+	mux.HandleFunc("POST /api/sets/assign", s.browser(s.setAssign))
+	mux.HandleFunc("POST /api/sets/default", s.browser(s.setDefault))
+	mux.HandleFunc("GET /api/farm", s.farm)
+	mux.HandleFunc("POST /api/sets/save", s.browser(s.setSave))
+	mux.HandleFunc("POST /api/sets/delete", s.browser(s.setDelete))
 	mux.HandleFunc("POST /webhook", s.webhook)
 	return mux
 }
@@ -151,6 +174,23 @@ func (s *Server) stateView(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// Send enqueues an MDM command for the device and returns its uuid (the release of the device listener uses it).
+func (s *Server) Send(udid, requestType string, args map[string]any) (string, error) {
+	return s.send(udid, requestType, args)
+}
+
+// Push sends an APNs push to the device: it connects and takes its queue.
+func (s *Server) Push(udid string) error {
+	status, body, err := s.NanoHUB.Push(udid)
+	if err != nil {
+		return err
+	}
+	if status/100 != 2 {
+		return fmt.Errorf("NanoHUB: %d %s", status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 // send enqueues a command of the UI; ClearPasscode gets the unlock token of the device
 func (s *Server) send(udid, requestType string, args map[string]any) (string, error) {
 	if !s.State.Enrolled(udid) {
@@ -237,34 +277,21 @@ func (s *Server) presetInstall(w http.ResponseWriter, _ *http.Request, body map[
 			params[k], _ = v.(string)
 		}
 	}
-	data, err := p.Build(s.Config.OrgName, params)
-	if err != nil {
+	if _, err := p.Build(s.Config.OrgName, params); err != nil {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
-	var steps []string
-	// one by one, each after the answer to the previous one
-	for _, c := range p.Before {
-		id, err := s.send(udid, c.RequestType, c.Args)
-		if err != nil {
-			fail(w, http.StatusBadRequest, err)
-			return
+	status, output, id := s.installPreset(udid, p, params)
+	if status == stepError && id == "" {
+		fail(w, http.StatusBadRequest, errors.New(output))
+		return
+	}
+	if status != stepQueued {
+		if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
+			output += "\nProfileList: " + s.wait(refresh)
 		}
-		steps = append(steps, c.RequestType+": "+s.wait(id))
 	}
-	id, err := s.send(udid, "InstallProfile", map[string]any{"Payload": map[string]any{"$data": base64.StdEncoding.EncodeToString(data)}})
-	if err != nil {
-		fail(w, http.StatusBadRequest, err)
-		return
-	}
-	status := s.wait(id)
-	steps = append(steps, "InstallProfile "+p.ID+": "+status)
-	if status == "Queued" {
-		steps = append(steps, "no answer: the device did not connect (network?), do not install again before it does")
-	} else if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
-		steps = append(steps, "ProfileList: "+s.wait(refresh))
-	}
-	reply(w, http.StatusOK, map[string]string{"output": strings.Join(steps, "\n"), "uuid": id})
+	reply(w, http.StatusOK, map[string]string{"output": output, "uuid": id})
 }
 
 func (s *Server) presetRemove(w http.ResponseWriter, _ *http.Request, body map[string]any) {
@@ -274,14 +301,12 @@ func (s *Server) presetRemove(w http.ResponseWriter, _ *http.Request, body map[s
 		fail(w, http.StatusBadRequest, errors.New("unknown preset"))
 		return
 	}
-	id, err := s.send(udid, "RemoveProfile", map[string]any{"Identifier": p.ID})
-	if err != nil {
-		fail(w, http.StatusBadRequest, err)
+	status, output, id := s.removePreset(udid, p)
+	if status == stepError && id == "" {
+		fail(w, http.StatusBadRequest, errors.New(output))
 		return
 	}
-	status := s.wait(id)
-	output := "RemoveProfile: " + status
-	if status != "Queued" {
+	if status != stepQueued {
 		if refresh, err := s.send(udid, "ProfileList", nil); err == nil {
 			output += "\nProfileList: " + s.wait(refresh)
 		}

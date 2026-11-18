@@ -143,4 +143,5 @@ func (s *Server) afterEnrollment(udid string) {
 	if _, err := s.send(udid, "ProfileList", nil); err != nil {
 		s.Log.Warn("ProfileList after the enrollment failed", "udid", udid, "err", err)
 	}
+	s.Enrolled("ios", udid)
 }

@@ -61,3 +61,47 @@ func TestSCEPOverride(t *testing.T) {
 		t.Fatalf("%v %q", err, c.SCEPURL)
 	}
 }
+
+func TestHeadwind(t *testing.T) {
+	c, err := Load(env(valid()))
+	if err != nil || c.HeadwindURL != "" {
+		t.Fatalf("Android is off by default: %q %v", c.HeadwindURL, err)
+	}
+	values := valid()
+	values["HMDM_URL"] = "http://mdm-hmdm:8080/"
+	_, err = Load(env(values))
+	for _, name := range []string{"HMDM_PASSWORD", "HMDM_SHARED_SECRET"} {
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s is not reported: %v", name, err)
+		}
+	}
+	values["HMDM_PASSWORD"] = "pass"
+	values["HMDM_SHARED_SECRET"] = "0123456789abcdef"
+	if c, err := Load(env(values)); err != nil || c.HeadwindPublicURL != "https://mcloud.example.com/hmdm" {
+		t.Errorf("HMDM_PUBLIC_URL by default: %v %v", c, err)
+	}
+	values["HMDM_PUBLIC_URL"] = "https://mcloud.example.com/a/b"
+	if _, err := Load(env(values)); err == nil || !strings.Contains(err.Error(), "HMDM_PUBLIC_URL") {
+		t.Errorf("two path segments accepted: %v", err)
+	}
+	values["HMDM_PUBLIC_URL"] = "https://mcloud.example.com/hmdm/"
+	values["HMDM_SHARED_SECRET"] = "0123456789abcdef"
+	c, err = Load(env(values))
+	if err != nil || c.HeadwindURL != "http://mdm-hmdm:8080" || c.HeadwindPublicURL != "https://mcloud.example.com/hmdm" ||
+		c.HeadwindLogin != "admin" || c.HeadwindMQTTPort != 31443 {
+		t.Errorf("valid: %+v %v", c, err)
+	}
+	values["HMDM_MQTT_PORT"] = "70000"
+	if _, err := Load(env(values)); err == nil || !strings.Contains(err.Error(), "HMDM_MQTT_PORT") {
+		t.Errorf("a bad MQTT port: %v", err)
+	}
+	values["HMDM_MQTT_PORT"] = ""
+	values["HMDM_PUBLIC_URL"] = "http://192.168.1.1:9080"
+	if c, err := Load(env(values)); err != nil || c.HeadwindMQTTPort != 31000 {
+		t.Errorf("plain MQTT by default for http: %v %v", c, err)
+	}
+	values["HMDM_SHARED_SECRET"] = "0123456789:abcdef"
+	if _, err := Load(env(values)); err == nil {
+		t.Error("a secret with a colon breaks the adb setup and is accepted")
+	}
+}

@@ -35,7 +35,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 PUSH_OUTPUT ?= --tag $(IMAGE_REPO):$(VERSION) --push
 PUSH_CACHE ?=
 
-.PHONY: help check lint test docker build push binary
+.PHONY: help check lint test docker build push binary agent
 
 check: ## everything below but build and push, as CI runs it; every step runs, the failed ones fail the target
 	@status=0; for target in lint test docker; do $(MAKE) --no-print-directory $$target || status=1; done; exit $$status
@@ -64,3 +64,12 @@ push: ## the image IMAGE_REPO:VERSION for PLATFORMS, built by docker buildx and 
 
 binary: ## the binary bin/mcloud-mdm for this machine
 	CGO_ENABLED=0 go build -trimpath -o bin/mcloud-mdm ./cmd/mcloud-mdm
+
+# The Android agent (android/agent): its key signs every build, Android updates a device owner app with the same key only
+AGENT_KEYSTORE ?=
+agent: ## the Android agent bin/mcloud-mdm-agent.apk: make agent AGENT_KEYSTORE=<keystore> AGENT_KEYSTORE_PASSWORD=<pass>
+	@[[ -f "$(AGENT_KEYSTORE)" && -n "$$AGENT_KEYSTORE_PASSWORD" ]] || \
+	  { echo "make agent AGENT_KEYSTORE=<keystore> AGENT_KEYSTORE_PASSWORD=<password>: the signing key is required"; exit 1; }
+	docker buildx build --platform linux/amd64 --progress=plain \
+	  --secret id=agent_keystore,src=$(AGENT_KEYSTORE) --secret id=agent_keystore_password,env=AGENT_KEYSTORE_PASSWORD \
+	  --output type=local,dest=bin android/agent

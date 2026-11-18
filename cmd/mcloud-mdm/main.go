@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,11 +19,14 @@ import (
 	"time"
 
 	"github.com/zebrunner/mcloud-mdm/internal/admin"
+	"github.com/zebrunner/mcloud-mdm/internal/android"
 	"github.com/zebrunner/mcloud-mdm/internal/config"
 	"github.com/zebrunner/mcloud-mdm/internal/device"
+	"github.com/zebrunner/mcloud-mdm/internal/headwind"
 	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
 	"github.com/zebrunner/mcloud-mdm/internal/scep"
 	"github.com/zebrunner/mcloud-mdm/internal/state"
+	"github.com/zebrunner/mcloud-mdm/internal/stf"
 )
 
 // version is set by the build of the image (-ldflags "-X main.version=<tag>")
@@ -99,6 +103,33 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	}
 	adm := &admin.Server{Config: cfg, NanoHUB: nanohub.New(cfg.NanoHUBURL, cfg.NanoHUBKey), State: st,
 		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second}
+	if cfg.STFURL != "" {
+		adm.STF = stf.New(cfg.STFURL, cfg.STFToken)
+	}
+	dev.Commands = adm
+	if cfg.HeadwindURL != "" {
+		mgr := &android.Manager{HW: headwind.New(cfg.HeadwindURL, cfg.HeadwindLogin, cfg.HeadwindPassword),
+			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret, MQTTPort: cfg.HeadwindMQTTPort}
+		if cfg.HeadwindTLSCAFile != "" {
+			raw, err := os.ReadFile(cfg.HeadwindTLSCAFile)
+			if err != nil {
+				return err
+			}
+			block, _ := pem.Decode(raw)
+			if block == nil || block.Type != "CERTIFICATE" {
+				return fmt.Errorf("HMDM_TLS_CA_FILE %s: no PEM certificate", cfg.HeadwindTLSCAFile)
+			}
+			mgr.CA = block.Bytes
+		}
+		if strings.HasPrefix(cfg.HeadwindPublicURL, "http://") {
+			log.Warn("HMDM_PUBLIC_URL is plain http: the API and MQTT of the agents are not encrypted, a lab only")
+		}
+		dev.Android, adm.Android = mgr, mgr
+		// Headwind MDM may start later: the problem is reported, Android works once it answers
+		if err := mgr.HW.Ping(); err != nil {
+			log.Warn("Headwind MDM does not answer yet", "url", cfg.HeadwindURL, "err", err)
+		}
+	}
 
 	servers := []*http.Server{
 		{Addr: cfg.DeviceListen, Handler: dev.Handler(), ReadHeaderTimeout: 10 * time.Second},
@@ -113,7 +144,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		}(srv)
 	}
 	log.Info("mcloud-mdm started", "version", version, "device", cfg.DeviceListen, "admin", cfg.AdminListen,
-		"public", cfg.PublicURL, "scep", cfg.SCEPURL, "nanohub", cfg.NanoHUBURL)
+		"public", cfg.PublicURL, "scep", cfg.SCEPURL, "nanohub", cfg.NanoHUBURL, "headwind", cfg.HeadwindURL)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

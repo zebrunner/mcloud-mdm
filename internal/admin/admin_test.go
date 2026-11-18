@@ -42,13 +42,15 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.commands = append(f.commands, cmd)
 		f.mu.Unlock()
 		uuid := cmd["CommandUUID"].(string)
-		report := map[string]any{"CommandUUID": uuid, "Status": "Acknowledged", "UDID": udid}
+		// the device of the path: several devices in a job
+		device := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		report := map[string]any{"CommandUUID": uuid, "Status": "Acknowledged", "UDID": device}
 		if cmd["Command"].(map[string]any)["RequestType"] == "ProfileList" {
 			report["ProfileList"] = []any{map[string]any{"PayloadIdentifier": "com.zebrunner.mcloud.mdm.preset.airdrop-off"}}
 		}
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			hook(f.admin, "mdm.Connect", map[string]any{"udid": udid, "status": "Acknowledged", "command_uuid": uuid}, report)
+			hook(f.admin, "mdm.Connect", map[string]any{"udid": device, "status": "Acknowledged", "command_uuid": uuid}, report)
 		}()
 	}
 	_, _ = io.WriteString(w, `{}`)
@@ -83,6 +85,12 @@ func hook(base, topic string, body map[string]any, report map[string]any) {
 
 func setup(t *testing.T) (*fakeHub, *httptest.Server, *state.Store) {
 	t.Helper()
+	hub, srv, st, _ := setupServer(t)
+	return hub, srv, st
+}
+
+func setupServer(t *testing.T) (*fakeHub, *httptest.Server, *state.Store, *Server) {
+	t.Helper()
 	hub := &fakeHub{}
 	hubSrv := httptest.NewServer(hub)
 	t.Cleanup(hubSrv.Close)
@@ -98,7 +106,7 @@ func setup(t *testing.T) (*fakeHub, *httptest.Server, *state.Store) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	hub.admin = srv.URL
-	return hub, srv, st
+	return hub, srv, st, s
 }
 
 func postJSON(t *testing.T, url string, body any, headers ...string) (int, map[string]any) {
@@ -120,6 +128,11 @@ func postJSON(t *testing.T, url string, body any, headers ...string) (int, map[s
 }
 
 func enroll(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	enrollDevice(t, srv, udid)
+}
+
+func enrollDevice(t *testing.T, srv *httptest.Server, udid string) {
 	t.Helper()
 	hook(srv.URL, "mdm.Authenticate", map[string]any{"udid": udid}, map[string]any{"UDID": udid, "SerialNumber": "SER", "ProductName": "iPhone11,8", "OSVersion": "18.7.11"})
 	hook(srv.URL, "mdm.TokenUpdate", map[string]any{"udid": udid}, map[string]any{"UDID": udid, "UnlockToken": []byte("unlock")})

@@ -1,0 +1,709 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index abcf02e..9d9baa4 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -55,10 +55,10 @@ android {
+         multiDexEnabled true
+
+         // Default URL of the web panel (scheme + host!)
+-        buildConfigField("String", "BASE_URL", "\"https://app.h-mdm.com\"")
++        buildConfigField("String", "BASE_URL", "\"https://mdm.invalid\"")
+         // URL of the secondary address of your web panel, called when the primary host is not available.
+         // Could be equal to the BASE_URL parameter
+-        buildConfigField("String", "SECONDARY_BASE_URL", "\"https://app.h-mdm.com\"")
++        buildConfigField("String", "SECONDARY_BASE_URL", "\"https://mdm.invalid\"")
+         // Relative path of the web panel on the server. Keep it empty if installed in the root
+         buildConfigField("String", "SERVER_PROJECT", "\"\"")
+         // This parameter manages how the device ID should be set up at first start
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 2aab588..ebb330f 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -116,6 +116,7 @@
+     <uses-feature android:name="android.software.leanback" android:required="false" />
+
+     <application
++        android:allowBackup="false"
+         android:icon="@mipmap/ic_launcher"
+         android:label="@string/white_app_name"
+         android:supportsRtl="true"
+@@ -230,6 +231,12 @@
+             </intent-filter>
+         </receiver>
+
++        <!-- MCloud: setup over adb, see SetupProvider -->
++        <provider
++            android:name=".mcloud.SetupProvider"
++            android:authorities="${applicationId}.mcloud"
++            android:exported="true" />
++
+         <provider
+             android:name="androidx.core.content.FileProvider"
+             android:authorities="${applicationId}.provider"
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+index d935f09..25f05fe 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+@@ -203,7 +203,10 @@ public class ConfigUpdater {
+     }
+
+     private void lockBackOnFailure() {
+-        Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++        // MCloud: no config yet on the first start without the server
++        if (settingsHelper.getConfig() != null) {
++            Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++        }
+     }
+
+     public void skipConfigLoad() {
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java b/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
+index eaf0c90..aa8f24a 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
+@@ -242,8 +242,8 @@ public class Initializer {
+     // Used by InitialSetupActivity
+     @SuppressLint("MissingPermission")
+     public static void applyEarlyNonInteractivePolicies(Context context, ServerConfig config) {
++        // MCloud: the default type too, it removes a policy set before (else a postpone stays forever)
+         if (config.getSystemUpdateType() != null &&
+-                config.getSystemUpdateType() != ServerConfig.SYSTEM_UPDATE_DEFAULT &&
+                 Utils.isDeviceOwner(context)) {
+             Utils.setSystemUpdatePolicy(context, config.getSystemUpdateType(), config.getSystemUpdateFrom(), config.getSystemUpdateTo());
+         }
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+index 8d9a16f..45682e5 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+@@ -59,7 +59,7 @@ public class MigrationHelper {
+                 String deviceId = settingsHelper.getDeviceId();
+                 String signature = "";
+                 try {
+-                    signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + deviceId);
++                    signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + deviceId);
+                 } catch (Exception e) {
+                 }
+
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
+new file mode 100644
+index 0000000..7332e89
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
+@@ -0,0 +1,58 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import com.hmdm.launcher.helper.SettingsHelper;
++
++import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
++
++import javax.net.ssl.HttpsURLConnection;
++import javax.net.ssl.SSLSocketFactory;
++
++/**
++ * MCloud: MQTT over TLS when the server is https: ssl://<host of the server>:<mqttPort of the setup>, the certificate
++ * checked by the trust of the device (the network security config: the system CAs and a CA of the setup) and its
++ * host name verified. A plain http server keeps tcp:// (a lab).
++ */
++public final class Mqtt {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY_PORT = "mqttPort";
++
++    private Mqtt() {
++    }
++
++    static void savePort(Context context, int port) {
++        prefs(context).edit().putInt(KEY_PORT, port).commit();
++    }
++
++    static int port(Context context) {
++        return prefs(context).getInt(KEY_PORT, 0);
++    }
++
++    public static boolean tls(Context context) {
++        SettingsHelper settings = SettingsHelper.getInstance(context);
++        return settings.isBaseUrlSet() && settings.getBaseUrl().startsWith("https://");
++    }
++
++    /** uri is the MQTT server: the host of the server, the port of the setup (or the default one). */
++    public static String uri(Context context, String host, int defaultPort) {
++        int port = port(context);
++        if (port <= 0) {
++            port = defaultPort;
++        }
++        return (tls(context) ? "ssl://" : "tcp://") + host + ":" + port;
++    }
++
++    public static void configure(Context context, MqttConnectOptions options) {
++        if (tls(context)) {
++            options.setSocketFactory(SSLSocketFactory.getDefault());
++            options.setSSLHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
++        }
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Release.java b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
+new file mode 100644
+index 0000000..9696070
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Release.java
+@@ -0,0 +1,42 @@
++package com.hmdm.launcher.mcloud;
++
++import android.app.admin.DevicePolicyManager;
++import android.content.Context;
++
++import com.hmdm.launcher.Const;
++import com.hmdm.launcher.util.RemoteLogger;
++import com.hmdm.launcher.util.Utils;
++
++/**
++ * MCloud: the "mcloudRelease" push and the "release" of SetupProvider (with the token). The agent clears the device
++ * owner by itself: no factory reset. adb cannot remove it: the agent is no test-only admin.
++ */
++public final class Release {
++
++    public static final String PUSH_TYPE = "mcloudRelease";
++
++    private Release() {
++    }
++
++    public static void run(Context context) {
++        if (!Utils.isDeviceOwner(context)) {
++            RemoteLogger.log(context, Const.LOG_WARN, "Release: not the device owner");
++            return;
++        }
++        RemoteLogger.log(context, Const.LOG_INFO, "Release: clearing the device owner");
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        try {
++            Utils.clearDefaultLauncher(context);
++            // Android 12 fails to remove the reset password token of a leaving device owner (it lists the users
++            // without the permission): the token goes first
++            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
++                dpm.clearResetPasswordToken(com.hmdm.launcher.util.LegacyUtils.getAdminComponentName(context));
++            }
++            // the CA of the setup goes with the device owner
++            TrustedCa.uninstall(context);
++            dpm.clearDeviceOwnerApp(context.getPackageName());
++        } catch (Exception e) {
++            RemoteLogger.log(context, Const.LOG_ERROR, "Release failed: " + android.util.Log.getStackTraceString(e));
++        }
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
+new file mode 100644
+index 0000000..dcc568e
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Secret.java
+@@ -0,0 +1,56 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import com.hmdm.launcher.BuildConfig;
++
++/**
++ * MCloud: the shared secret of the server (MQTT password, request signatures), set over adb by SetupProvider instead of
++ * being built into the APK: one APK for every farm.
++ */
++public final class Secret {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY = "secret";
++
++    private static volatile String value = BuildConfig.REQUEST_SIGNATURE;
++
++    private Secret() {
++    }
++
++    public static String value() {
++        return value;
++    }
++
++    public static boolean isSet(Context context) {
++        return prefs(context).getString(KEY, null) != null;
++    }
++
++    /** matches compares the token with the saved secret in constant time. */
++    static boolean matches(Context context, String token) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null || token == null) {
++            return false;
++        }
++        return java.security.MessageDigest.isEqual(
++                saved.getBytes(java.nio.charset.StandardCharsets.UTF_8),
++                token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
++    }
++
++    static void load(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved != null && !saved.isEmpty()) {
++            value = saved;
++        }
++    }
++
++    static void save(Context context, String secret) {
++        prefs(context).edit().putString(KEY, secret).commit();
++        value = secret;
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
+new file mode 100644
+index 0000000..e6e5e33
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
+@@ -0,0 +1,132 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.ContentProvider;
++import android.content.ContentValues;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Binder;
++import android.os.Bundle;
++
++import com.hmdm.launcher.helper.SettingsHelper;
++import com.hmdm.launcher.util.Utils;
++
++/**
++ * MCloud: configures and releases the agent over adb without the screen.
++ *
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup \
++ *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SECRET --extra token:s:SECRET \
++ *     [--extra mqttPort:i:31443] [--extra ca:s:BASE64_OF_THE_CA]
++ * (MQTT is ssl:// on the host of the server for an https server; ca: the CA of a private certificate, a lab)
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:SECRET
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method status
++ * (the url goes in --arg: "content" refuses colons in the values of --extra)
++ *
++ * Only adb shell and root may call it. Every user of adb is the shell uid (the remote debug of the farm too), so once
++ * the agent has its secret, setup and release need it as the token: nobody without the secret of the server moves
++ * the device to another server or removes the device owner. The secret is never returned.
++ */
++public class SetupProvider extends ContentProvider {
++
++    private static final int SHELL_UID = 2000;
++    private static final int ROOT_UID = 0;
++
++    @Override
++    public boolean onCreate() {
++        // providers are created before the other components of the app: the secret is ready for all of them
++        Secret.load(getContext());
++        Watchdog.ensure(getContext());
++        return true;
++    }
++
++    private void checkToken(Bundle extras) {
++        if (!Secret.isSet(getContext())) {
++            return;
++        }
++        String token = extras != null ? extras.getString("token") : null;
++        if (!Secret.matches(getContext(), token)) {
++            throw new SecurityException("the token (the secret of the server) is required");
++        }
++    }
++
++    @Override
++    public Bundle call(String method, String arg, Bundle extras) {
++        int uid = Binder.getCallingUid();
++        if (uid != SHELL_UID && uid != ROOT_UID) {
++            throw new SecurityException("only adb shell may configure the agent");
++        }
++        SettingsHelper settings = SettingsHelper.getInstance(getContext());
++        if ("setup".equals(method)) {
++            checkToken(extras);
++            String baseUrl = arg;
++            String deviceId = extras != null ? extras.getString("deviceId") : null;
++            String secret = extras != null ? extras.getString("secret") : null;
++            if (baseUrl == null || !(baseUrl.startsWith("https://") || baseUrl.startsWith("http://"))) {
++                throw new IllegalArgumentException("baseUrl (http or https) is required");
++            }
++            if (deviceId == null || deviceId.trim().isEmpty()) {
++                throw new IllegalArgumentException("deviceId is required");
++            }
++            if (secret == null || secret.length() < 16) {
++                throw new IllegalArgumentException("secret (16+ characters) is required");
++            }
++            settings.setBaseUrl(baseUrl);
++            settings.setSecondaryBaseUrl(baseUrl);
++            settings.setServerProject(extras.getString("serverProject", ""));
++            settings.setDeviceId(deviceId.trim());
++            Secret.save(getContext(), secret);
++            int mqttPort = extras.getInt("mqttPort", 0);
++            if (mqttPort < 0 || mqttPort > 65535) {
++                throw new IllegalArgumentException("mqttPort: 1-65535");
++            }
++            Mqtt.savePort(getContext(), mqttPort);
++            String ca = extras.getString("ca");
++            if (ca != null && !ca.isEmpty() && !TrustedCa.install(getContext(), ca)) {
++                throw new IllegalStateException("the CA is not installed (the agent must be the device owner)");
++            }
++        } else if ("release".equals(method)) {
++            if (!Secret.isSet(getContext())) {
++                throw new SecurityException("the agent has no secret: it was never set up");
++            }
++            checkToken(extras);
++            Release.run(getContext());
++        } else if (!"status".equals(method)) {
++            throw new IllegalArgumentException("unknown method: " + method);
++        }
++        Bundle result = new Bundle();
++        result.putBoolean("deviceOwner", Utils.isDeviceOwner(getContext()));
++        result.putBoolean("configured", settings.isBaseUrlSet() && settings.getDeviceId() != null && !settings.getDeviceId().isEmpty());
++        result.putString("baseUrl", settings.isBaseUrlSet() ? settings.getBaseUrl() : null);
++        result.putString("deviceId", settings.getDeviceId());
++        result.putBoolean("configLoaded", settings.getConfig() != null);
++        result.putBoolean("secretSet", Secret.isSet(getContext()));
++        result.putString("mqtt", settings.isBaseUrlSet() ? Mqtt.uri(getContext(), Uri.parse(settings.getBaseUrl()).getHost(),
++                com.hmdm.launcher.BuildConfig.MQTT_PORT) : null);
++        result.putBoolean("caInstalled", TrustedCa.installed(getContext()));
++        return result;
++    }
++
++    @Override
++    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
++        return null;
++    }
++
++    @Override
++    public String getType(Uri uri) {
++        return null;
++    }
++
++    @Override
++    public Uri insert(Uri uri, ContentValues values) {
++        return null;
++    }
++
++    @Override
++    public int delete(Uri uri, String selection, String[] selectionArgs) {
++        return 0;
++    }
++
++    @Override
++    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
++        return 0;
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
+new file mode 100644
+index 0000000..f375ff7
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
+@@ -0,0 +1,64 @@
++package com.hmdm.launcher.mcloud;
++
++import android.app.admin.DevicePolicyManager;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.util.Base64;
++
++import com.hmdm.launcher.util.LegacyUtils;
++
++/**
++ * MCloud: the CA of a server with a private certificate (a lab), installed by the device owner as a user CA without
++ * a prompt; the network security config of the agent trusts the user CAs. Removed again by the release.
++ */
++final class TrustedCa {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY = "ca";
++
++    private TrustedCa() {
++    }
++
++    /** install installs the CA (base64 of the DER or of the PEM) and returns true when it is installed. */
++    static boolean install(Context context, String base64) {
++        byte[] cert = Base64.decode(base64, Base64.DEFAULT);
++        String text = new String(cert, java.nio.charset.StandardCharsets.US_ASCII);
++        if (text.contains("-----BEGIN CERTIFICATE-----")) {
++            String body = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
++            cert = Base64.decode(body, Base64.DEFAULT);
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        boolean ok = dpm.installCaCert(LegacyUtils.getAdminComponentName(context), cert);
++        if (ok) {
++            prefs(context).edit().putString(KEY, Base64.encodeToString(cert, Base64.NO_WRAP)).commit();
++        }
++        return ok;
++    }
++
++    static boolean installed(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null) {
++            return false;
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        try {
++            return dpm.hasCaCertInstalled(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
++        } catch (SecurityException e) {
++            return false;
++        }
++    }
++
++    static void uninstall(Context context) {
++        String saved = prefs(context).getString(KEY, null);
++        if (saved == null) {
++            return;
++        }
++        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
++        dpm.uninstallCaCert(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
++        prefs(context).edit().remove(KEY).commit();
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Watchdog.java b/app/src/main/java/com/hmdm/launcher/mcloud/Watchdog.java
+new file mode 100644
+index 0000000..b9a3f11
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Watchdog.java
+@@ -0,0 +1,47 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.os.Handler;
++import android.os.Looper;
++
++import com.hmdm.launcher.Const;
++import com.hmdm.launcher.helper.Initializer;
++import com.hmdm.launcher.helper.SettingsHelper;
++import com.hmdm.launcher.util.RemoteLogger;
++import com.hmdm.launcher.util.Utils;
++
++/**
++ * MCloud: the agent starts its services (MQTT, the configuration) at every start of its process when they are not
++ * running yet. The system launcher stays on a farm device, so only BootReceiver started them after a reboot, and
++ * BOOT_COMPLETED sometimes never reached it (seen on Android 12): the device stayed without push until somebody opened
++ * the agent. Any start of the process (a receiver, WorkManager every 15 minutes, adb) now brings them back.
++ */
++public final class Watchdog {
++
++    private static volatile boolean started;
++
++    private Watchdog() {
++    }
++
++    /** claim returns true once per process: the caller starts the services. */
++    public static synchronized boolean claim() {
++        if (started) {
++            return false;
++        }
++        started = true;
++        return true;
++    }
++
++    static void ensure(Context context) {
++        final Context app = context.getApplicationContext();
++        // after the Application and the other providers are created
++        new Handler(Looper.getMainLooper()).post(() -> {
++            if (!Utils.isDeviceOwner(app) || !SettingsHelper.getInstance(app).isBaseUrlSet()
++                    || SettingsHelper.getInstance(app).getConfig() == null || !claim()) {
++                return;
++            }
++            RemoteLogger.log(app, Const.LOG_INFO, "Watchdog: starting the services");
++            Initializer.init(app, () -> Initializer.startServicesAndLoadConfig(app));
++        });
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/receiver/BootReceiver.java b/app/src/main/java/com/hmdm/launcher/receiver/BootReceiver.java
+index 4aeffdc..9ab7d4b 100644
+--- a/app/src/main/java/com/hmdm/launcher/receiver/BootReceiver.java
++++ b/app/src/main/java/com/hmdm/launcher/receiver/BootReceiver.java
+@@ -33,6 +33,11 @@ public class BootReceiver extends BroadcastReceiver {
+             return;
+         }
+
++        // MCloud: the watchdog of the process may have started the services already
++        if (!com.hmdm.launcher.mcloud.Watchdog.claim()) {
++            Log.i(Const.LOG_TAG, "The services are started by the watchdog, ignoring BootReceiver");
++            return;
++        }
+         Initializer.init(context, () -> {
+             Initializer.startServicesAndLoadConfig(context);
+
+diff --git a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java b/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
+index 3c5cf8c..2a1acde 100644
+--- a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
++++ b/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
+@@ -115,7 +115,7 @@ public class PushLongPollingService extends Service {
+         String path = settingsHelper.getServerProject() + "/rest/notification/polling/" + encodedDeviceId;
+         String signature = null;
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + path);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + path);
+         } catch (Exception e) {
+         }
+
+diff --git a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+index f778868..654a664 100644
+--- a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
++++ b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+@@ -94,7 +94,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+         String deviceId = settingsHelper.getDeviceId();
+         String signature = "";
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + deviceId);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + deviceId);
+         } catch (Exception e) {
+         }
+
+@@ -249,7 +249,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+                 return null;
+             }
+             String serverData = serverResponse.substring(pos + dataMarker.length(), serverResponse.length() - 1);
+-            String calculatedSignature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + serverData.replaceAll("\\s", ""));
++            String calculatedSignature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + serverData.replaceAll("\\s", ""));
+             if (!calculatedSignature.equalsIgnoreCase(serverSignature)) {
+                 errorText = "Server signature " + serverSignature + " doesn't match calculated signature " + calculatedSignature + ", dropping response";
+                 Log.e(Const.LOG_TAG, errorText);
+@@ -355,7 +355,7 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+                 return null;
+             }
+             String serverData = serverResponse.substring(pos + dataMarker.length(), serverResponse.length() - 1);
+-            String calculatedSignature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + serverData.replaceAll("\\s", ""));
++            String calculatedSignature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + serverData.replaceAll("\\s", ""));
+             if (!calculatedSignature.equalsIgnoreCase(serverSignature)) {
+                 errorText = "Server signature " + serverSignature + " doesn't match calculated signature " + calculatedSignature + ", dropping response";
+                 Log.e(Const.LOG_TAG, errorText);
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+index 3cf4d12..b3153fd 100644
+--- a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
++++ b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+@@ -2507,15 +2507,8 @@ public class MainActivity
+         }
+
+         if (Utils.isDeviceOwner(this)) {
+-            if (settingsHelper.getConfig() != null && (ServerConfig.APP_PERMISSIONS_ASK_ALL.equals(settingsHelper.getConfig().getAppPermissions()) ||
+-                    ServerConfig.APP_PERMISSIONS_ASK_LOCATION.equals(settingsHelper.getConfig().getAppPermissions()))) {
+-                // Even in device owner mode, if "Ask for location" is requested by the admin,
+-                // let's ask permissions (so do nothing here, fall through)
+-            } else {
+-                // Do not request permissions if we're the device owner
+-                // They are added automatically
+-                return true;
+-            }
++            // MCloud: no permission dialogs of the agent on a farm device, even with "ask" for the other apps
++            return true;
+         }
+
+         if (preferences.getInt(Const.PREFERENCES_DISABLE_LOCATION, Const.PREFERENCES_OFF) == Const.PREFERENCES_ON) {
+diff --git a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
+index fd9a389..0cf8eec 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
++++ b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
+@@ -420,7 +420,7 @@ public class InstallUtils {
+         String filepath = strUrl.substring(index);
+
+         try {
+-            return CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + filepath);
++            return CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + filepath);
+         } catch (Exception e) {
+         }
+         return null;
+diff --git a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+index a3f58c1..d0f2d47 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
++++ b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+@@ -111,8 +111,10 @@ public class PushNotificationMqttWrapper {
+             connectOptions.setKeepAliveInterval(keepaliveTime);
+         }
+         connectOptions.setUserName("hmdm");
+-        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + BuildConfig.REQUEST_SIGNATURE).toCharArray());
+-        String serverUri = "tcp://" + host + ":" + port;
++        connectOptions.setPassword(CryptoHelper.getSHA1String("hmdm" + com.hmdm.launcher.mcloud.Secret.value()).toCharArray());
++        // MCloud: ssl:// for an https server, the port of the setup
++        com.hmdm.launcher.mcloud.Mqtt.configure(context, connectOptions);
++        String serverUri = com.hmdm.launcher.mcloud.Mqtt.uri(context, host, port);
+
+         if (client != null) {
+             // Here we go after reconnection.
+diff --git a/app/src/main/java/com/hmdm/launcher/util/Utils.java b/app/src/main/java/com/hmdm/launcher/util/Utils.java
+index 5b16ee4..581dbe6 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/Utils.java
++++ b/app/src/main/java/com/hmdm/launcher/util/Utils.java
+@@ -330,6 +330,10 @@ public class Utils {
+             Log.e(Const.LOG_TAG, "Failed to set system update policy: " + e.getMessage());
+             return;
+         }
++        if (systemUpdateType == ServerConfig.SYSTEM_UPDATE_DEFAULT && currentPolicy == null) {
++            // MCloud: no policy to remove
++            return;
++        }
+         if (currentPolicy != null) {
+             // Check if policy type shouldn't be changed
+             if (systemUpdateType == ServerConfig.SYSTEM_UPDATE_INSTANT && currentPolicy.getPolicyType() == SystemUpdatePolicy.TYPE_INSTALL_AUTOMATIC ||
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+index a075f23..cf3ea8b 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+@@ -136,6 +136,10 @@ public class PushNotificationProcessor {
+             // Clear application data
+             executor.execute(() -> clearAppData(context, message.getPayloadJSON()));
+             return;
++        } else if (message.getMessageType().equals(com.hmdm.launcher.mcloud.Release.PUSH_TYPE)) {
++            // MCloud: give up the device owner: the restrictions go away, the agent becomes a regular app
++            com.hmdm.launcher.mcloud.Release.run(context);
++            return;
+         }
+
+         // Send broadcast to all plugins
+@@ -352,12 +356,13 @@ public class PushNotificationProcessor {
+             String result = SystemUtils.executeShellCommand(command, true);
+             String msg = "Executed a command: " + command;
+             if (!result.equals("")) {
+-                if (result.length() > 200) {
+-                    result = result.substring(0, 200) + "...";
++                // MCloud: the output is the answer of the command in the device log
++                if (result.length() > 3000) {
++                    result = result.substring(0, 3000) + "...";
+                 }
+                 msg += " Result: " + result;
+             }
+-            RemoteLogger.log(context, Const.LOG_DEBUG, msg);
++            RemoteLogger.log(context, Const.LOG_INFO, msg);
+
+         } catch (Exception e) {
+             RemoteLogger.log(context, Const.LOG_WARN, "Command failed: " + e.getMessage());
+@@ -474,9 +479,14 @@ public class PushNotificationProcessor {
+             }
+         }
+
++        // MCloud: the push is the decision of the admin, the strategy of the configuration (ASKALL on a farm) would
++        // only reset the permissions; "mode": "default" gives them back to the user (and to the tests)
++        String mode = payload != null ? payload.optString("mode", "grant") : "grant";
++        String strategy = "default".equals(mode) ? ServerConfig.APP_PERMISSIONS_ASK_ALL : null;
+         for (String app: apps) {
+-            Utils.autoGrantRequestedPermissions(context, app,
+-                    config.getAppPermissions(), false);
++            boolean done = Utils.autoGrantRequestedPermissions(context, app, strategy, false);
++            RemoteLogger.log(context, done ? Const.LOG_INFO : Const.LOG_WARN, "Permissions of " + app + ": " +
++                    ("default".equals(mode) ? "back to the user" : "granted") + (done ? "" : " - failed"));
+         }
+     }
+
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+index 13b1da3..3ac11e8 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+@@ -121,7 +121,7 @@ public class PushNotificationWorker extends Worker {
+         String path = settingsHelper.getServerProject() + "/rest/notifications/device/" + encodedDeviceId;
+         String signature = null;
+         try {
+-            signature = CryptoHelper.getSHA1String(BuildConfig.REQUEST_SIGNATURE + path);
++            signature = CryptoHelper.getSHA1String(com.hmdm.launcher.mcloud.Secret.value() + path);
+         } catch (Exception e) {
+         }
+

@@ -144,7 +144,7 @@
   "supervised": false,
   "args": {},
   "danger": true,
-  "hint": "Removes the passcode with the UnlockToken the device sent at the enrollment, filled in by mcloud-mdm (the UnlockToken tag of the device). Checked on iOS 18.7.11: Acknowledged (no passcode was set)."
+  "hint": "Removes the passcode with the UnlockToken the device sent at the enrollment, filled in by mcloud-mdm (the UnlockToken tag of the device). It also UNPAIRS the device from every computer (checked on iOS 18.7.11, every time): the host of the device loses USB (go-ios: InvalidHostID) until it pairs again, with no prompt on a supervised device: ios pair --p12file=<supervision.p12>. MDM keeps working."
  },
  {
   "group": "Device",
