@@ -50,6 +50,10 @@ type Config struct {
 	HeadwindTLSCAFile string
 	// AgentAPK is the Android agent (make agent) served at /android/agent.apk
 	AgentAPK string
+	// STFURL is the API of STF (MCloud) with an access token STFToken: the names, nodes and locations of the devices
+	// and whether a user has one; empty: no groups and no jobs waiting for free devices
+	STFURL   string
+	STFToken string
 }
 
 var headwindPath = regexp.MustCompile(`^(/[A-Za-z0-9_-]+)?$`)
@@ -83,6 +87,16 @@ func Load(getenv func(string) string) (*Config, error) {
 		HeadwindSecret:    get("HMDM_SHARED_SECRET", ""),
 		HeadwindTLSCAFile: get("HMDM_TLS_CA_FILE", ""),
 		AgentAPK:          get("MDM_ANDROID_AGENT_APK", "/android/mcloud-mdm-agent.apk"),
+		STFURL:            strings.TrimRight(get("MDM_STF_URL", ""), "/"),
+		STFToken:          get("MDM_STF_TOKEN", ""),
+	}
+	if c.STFURL != "" {
+		if u, err := url.Parse(c.STFURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("MDM_STF_URL %q: the http(s) URL of the API of STF, e.g. http://stf-api:3000", c.STFURL))
+		}
+		if c.STFToken == "" {
+			errs = append(errs, errors.New("MDM_STF_TOKEN is empty: an access token of STF (Settings, Keys) for MDM_STF_URL"))
+		}
 	}
 	if u, err := url.Parse(c.PublicURL); c.PublicURL == "" || err != nil || u.Scheme != "https" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("MDM_PUBLIC_URL %q: the https URL the devices reach, e.g. https://mcloud.example.com", c.PublicURL))

@@ -89,6 +89,8 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `HMDM_MQTT_PORT` | `31443` for an https `HMDM_PUBLIC_URL`, `31000` otherwise | the MQTT port of the agents on the host of `HMDM_PUBLIC_URL` (TLS when it is https) |
 | `HMDM_TLS_CA_FILE` | | the PEM CA of a private certificate of `HMDM_PUBLIC_URL`: the setup installs it on the devices (a lab) |
 | `MDM_ANDROID_AGENT_APK` | `/android/mcloud-mdm-agent.apk` | the agent (`make agent`) served at `/android/agent.apk` |
+| `MDM_STF_URL` | | the API of STF (MCloud, `http://stf-api:3000`): the names, nodes and locations of the devices (the groups of the admin UI), whether a user has a device (the jobs on free devices only); empty: none of them |
+| `MDM_STF_TOKEN` | | an access token of STF (Settings, Keys) for `MDM_STF_URL`, read only |
 
 ## Enrollment
 
@@ -320,14 +322,14 @@ Per farm (a test farm first):
 
 Three tabs: iOS, Android and Server (`#ios`, `#android`, `#server` in the URL).
 
-- iOS and Android: the devices with their state and the settings on (a filter, All, None, Invert, Problems: not managed, left MDM, waiting for sync); the checked devices are the targets of every action, a click on a device shows its details (Android: its log).
+- iOS and Android: the devices with their model, node and location (STF), state, user (STF: free, in use, disconnected), set and the settings on; a filter, the node and the location (S1 selects S1_A1, S1_B2, ...), All, None, Invert, Problems (not managed, left MDM, waiting for sync), Free, Differ from their set. The checked devices are the targets of every action, a click on a device shows its details (Android: its log).
   - Settings: every preset On, Off or "-" (left as it is), with the counts of the selected devices; Apply runs the chosen ones on the selected devices.
   - Commands: every MDM command of iOS of Apple (a hint: what it does, what it needs, its result on a supervised iPhone XR with iOS 18.7.11; `{"$data": "<base64>"}` is data, filled from a file) and every push command of the Android agent; Send runs it on the selected devices, Add to the set puts it into Settings; iOS: Push (wake up).
-  - Saved sets: the settings and the commands of Settings saved under a name per platform (kept in `state.json`, a password is never stored: asked when the set is applied); Apply runs a set on the selected devices, Edit loads it into Settings.
-  - Jobs: every Apply and Send is a job (`POST /api/jobs`, `GET /api/jobs`): the devices in parallel (8 at a time), the actions of a device one by one, a failed action does not stop the next ones; ok, queued (iOS: the device takes the command when it connects), error; the report of every iOS command. In memory, the last 50.
+  - Saved sets: the settings and the commands of Settings saved under a name per platform (kept in `state.json`; a password is never stored: the UI asks for it, a job without it fails that action). Apply runs a set on the selected devices; Assign makes it the set of the selected devices: the table shows the devices whose settings differ from their set, Fix applies the settings of the set to them. The default set of a platform is assigned and applied to every new device (iOS: a new enrollment; Android: a device new to Headwind MDM); a device enrolled again gets its own set.
+  - Jobs: every Apply and Send is a job (`POST /api/jobs`, `GET /api/jobs`, `POST /api/jobs/cancel`): the devices in parallel (8 at a time), the actions of a device one by one, a failed action does not stop the next ones; ok, queued (iOS: the device takes the command when it connects), error, skipped, cancelled; the report of every iOS command. Options: a start time, free devices only (each device waits until nobody uses it in STF, checked every 30 s) and the end of the window (the devices still busy then are skipped). In memory, the last 50: a restart of mcloud-mdm drops the jobs that did not finish.
   - The commands sent with their reports (iOS; `Cleared`: never delivered, NanoMDM clears the queue of a device that enrolls again) or their delivery (Android), the check-in events (iOS) or the device log (Android).
 - Server: the upload of the APNs push certificate and its key, the console of the API of NanoHUB with the DDM declarations (configurations, activations, sets, status) and NanoCMD, the manual enrollment of an Android serial.
-- The names of the iOS devices come from their hosts (`/mdm/enroll?udid=<udid>&name=<name>`); the unlock token of `ClearPasscode` is kept and never shown.
+- The names of the devices come from their hosts (`/mdm/enroll?udid=<udid>&name=<name>`, Android: the enrollment), else from STF; the iPhones show their marketing names; the unlock token of `ClearPasscode` is kept and never shown.
 
 ## Ready profiles
 

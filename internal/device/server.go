@@ -38,9 +38,11 @@ type Server struct {
 	tlsCA    []byte
 }
 
-// Commander enqueues an MDM command for a device (NanoHUB pushes it) and returns its uuid.
+// Commander enqueues an MDM command for a device (NanoHUB pushes it) and returns its uuid; Enrolled applies the set of
+// a new device.
 type Commander interface {
 	Send(udid, requestType string, args map[string]any) (string, error)
+	Enrolled(platform, device string)
 }
 
 // New returns the server; the DER of MDM_TLS_CA_FILE is read once.
@@ -156,7 +158,10 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	s.Log.Info("android enrollment prepared", "serial", serial, "remote", r.RemoteAddr)
+	s.Log.Info("android enrollment prepared", "serial", serial, "new", setup.New, "remote", r.RemoteAddr)
+	if setup.New && s.Commands != nil {
+		go s.Commands.Enrolled("android", serial)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Query().Get("format") == "shell" {
 		// the setup command of the agent for adb shell, for the scripts without a JSON parser (android/enroll.sh)

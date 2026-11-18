@@ -140,3 +140,51 @@ func TestNamesAndSets(t *testing.T) {
 		t.Errorf("delete: %v", err)
 	}
 }
+
+func TestDefaultAndAssigned(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := []Action{{Kind: "push"}}
+	for _, n := range []string{"Base", "Lab"} {
+		if err := s.SaveSet(Set{Name: n, Platform: "ios", Actions: a}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, ok := s.SetOf("ios", "U1"); ok {
+		t.Error("a set without a default or an assignment")
+	}
+	if err := s.SetDefault("ios", "Base"); err != nil {
+		t.Fatal(err)
+	}
+	if set, assigned, ok := s.SetOf("ios", "U1"); !ok || assigned || set.Name != "Base" {
+		t.Errorf("default: %v %v %v", set.Name, assigned, ok)
+	}
+	if err := s.SaveSet(Set{Name: "Base", Platform: "ios", Actions: a}); err != nil || !s.Sets()[0].Default {
+		t.Errorf("a saved set keeps its default: %v %+v", err, s.Sets())
+	}
+	if err := s.Assign("ios", "Lab", []string{"U1", "U2"}); err != nil {
+		t.Fatal(err)
+	}
+	if set, assigned, _ := s.SetOf("ios", "U1"); !assigned || set.Name != "Lab" {
+		t.Errorf("assigned: %v %v", set.Name, assigned)
+	}
+	if err := s.Assign("ios", "Nothing", []string{"U1"}); err == nil {
+		t.Error("an unknown set assigned")
+	}
+	_ = s.Assign("ios", "", []string{"U2"})
+	if got := s.Assigned()["ios"]; len(got) != 1 || got["U1"] != "Lab" {
+		t.Errorf("assigned: %v", got)
+	}
+	_ = s.DeleteSet("ios", "Lab")
+	if got := s.Assigned()["ios"]; len(got) != 0 {
+		t.Errorf("the assignments of a deleted set: %v", got)
+	}
+	if err := s.SetDefault("ios", "Nothing"); err == nil {
+		t.Error("an unknown default")
+	}
+	if err := s.SetDefault("ios", ""); err != nil || s.Sets()[0].Default {
+		t.Errorf("no default: %v", err)
+	}
+}

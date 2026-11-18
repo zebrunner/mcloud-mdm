@@ -32,7 +32,13 @@ const (
 	stepOK      = "ok"
 	stepQueued  = "queued"
 	stepError   = "error"
+	// a device the job did not reach: busy until the end of its window, or the job cancelled
+	stepSkipped   = "skipped"
+	stepCancelled = "cancelled"
 )
+
+// freePoll is the period of the checks of a device busy in STF
+var freePoll = 30 * time.Second
 
 // Step is an action of a job on one device.
 type Step struct {
@@ -45,9 +51,19 @@ type Step struct {
 
 // Target is a device of a job with its steps.
 type Target struct {
-	Device string  `json:"device"`
-	Status string  `json:"status"`
-	Steps  []*Step `json:"steps"`
+	Device string `json:"device"`
+	Status string `json:"status"`
+	// Note: why the device waits (busy in STF)
+	Note  string  `json:"note,omitempty"`
+	Steps []*Step `json:"steps"`
+}
+
+// JobOptions: StartAt delays the job, FreeOnly waits for each device until no user has it in STF, Until ends the
+// waiting (the devices still busy are skipped).
+type JobOptions struct {
+	StartAt  time.Time
+	Until    time.Time
+	FreeOnly bool
 }
 
 // Job is a list of actions run on a list of devices of one platform.
@@ -56,8 +72,14 @@ type Job struct {
 	Platform   string    `json:"platform"`
 	Title      string    `json:"title"`
 	CreatedAt  string    `json:"created_at"`
+	StartAt    string    `json:"start_at,omitempty"`
+	Until      string    `json:"until,omitempty"`
+	FreeOnly   bool      `json:"free_only,omitempty"`
 	FinishedAt string    `json:"finished_at,omitempty"`
+	Cancelled  bool      `json:"cancelled,omitempty"`
 	Targets    []*Target `json:"targets"`
+
+	cancel chan struct{}
 }
 
 // jobs are the jobs of the admin UI, in memory: the newest first
@@ -102,6 +124,23 @@ func (j *jobs) update(fn func()) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	fn()
+}
+
+// stop cancels a job that did not finish: the devices not reached yet are skipped
+func (j *jobs) stop(id string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, job := range j.list {
+		if job.ID == id {
+			if job.FinishedAt != "" || job.Cancelled {
+				return errors.New("the job is not running")
+			}
+			job.Cancelled = true
+			close(job.cancel)
+			return nil
+		}
+	}
+	return fmt.Errorf("no job %q", id)
 }
 
 // actionTitle names an action in a job
@@ -178,9 +217,15 @@ func (s *Server) checkActions(platform string, actions []state.Action) error {
 }
 
 // startJob runs the actions on the devices in the background and returns the job at once
-func (s *Server) startJob(platform, title string, devices []string, actions []state.Action) (*Job, error) {
+func (s *Server) startJob(platform, title string, devices []string, actions []state.Action, opts JobOptions) (*Job, error) {
 	if err := s.checkActions(platform, actions); err != nil {
 		return nil, err
+	}
+	if opts.FreeOnly && s.STF == nil {
+		return nil, errors.New("free devices only: no STF (MDM_STF_URL)")
+	}
+	if !opts.Until.IsZero() && (!opts.Until.After(time.Now()) || (!opts.StartAt.IsZero() && !opts.Until.After(opts.StartAt))) {
+		return nil, errors.New("the end of the window is before its start or in the past")
 	}
 	var targets []*Target
 	seen := map[string]bool{}
@@ -204,18 +249,41 @@ func (s *Server) startJob(platform, title string, devices []string, actions []st
 			title = actionTitle(platform, actions[0])
 		}
 	}
-	job := &Job{ID: nanohub.NewUUID()[:8], Platform: platform, Title: title, CreatedAt: time.Now().UTC().Format(time.RFC3339), Targets: targets}
+	job := &Job{ID: nanohub.NewUUID()[:8], Platform: platform, Title: title, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		FreeOnly: opts.FreeOnly, Targets: targets, cancel: make(chan struct{})}
+	if !opts.StartAt.IsZero() {
+		job.StartAt = opts.StartAt.UTC().Format(time.RFC3339)
+	}
+	if !opts.Until.IsZero() {
+		job.Until = opts.Until.UTC().Format(time.RFC3339)
+	}
 	s.jobs.add(job)
-	s.Log.Info("job started", "job", job.ID, "platform", platform, "title", title, "devices", len(targets), "actions", len(actions))
+	s.Log.Info("job started", "job", job.ID, "platform", platform, "title", title, "devices", len(targets), "actions", len(actions),
+		"start_at", job.StartAt, "until", job.Until, "free_only", opts.FreeOnly)
 	go func() {
+		if d := time.Until(opts.StartAt); d > 0 {
+			select {
+			case <-time.After(d):
+			case <-job.cancel:
+			}
+		}
 		sem := make(chan struct{}, jobParallelism)
 		var wg sync.WaitGroup
 		for _, t := range targets {
 			wg.Add(1)
-			sem <- struct{}{}
 			go func(t *Target) {
-				defer func() { <-sem; wg.Done() }()
-				s.runTarget(platform, t, actions)
+				defer wg.Done()
+				if !s.waitFree(job, t, opts) {
+					return
+				}
+				select {
+				case sem <- struct{}{}:
+				case <-job.cancel:
+					s.skip(t, stepCancelled, "")
+					return
+				}
+				defer func() { <-sem }()
+				s.runTarget(job, platform, t, actions)
 			}(t)
 		}
 		wg.Wait()
@@ -225,12 +293,76 @@ func (s *Server) startJob(platform, title string, devices []string, actions []st
 	return job, nil
 }
 
+// skip marks the device and its steps not run
+func (s *Server) skip(t *Target, status, note string) {
+	s.jobs.update(func() {
+		t.Status, t.Note = status, note
+		for _, st := range t.Steps {
+			if st.Status == stepWaiting {
+				st.Status = status
+			}
+		}
+	})
+}
+
+// waitFree waits until the job may run on the device: not cancelled, and with FreeOnly present and free in STF
+// (until the end of the window)
+func (s *Server) waitFree(job *Job, t *Target, opts JobOptions) bool {
+	for {
+		select {
+		case <-job.cancel:
+			s.skip(t, stepCancelled, "")
+			return false
+		default:
+		}
+		if !opts.FreeOnly {
+			return true
+		}
+		note := ""
+		devices, err := s.STF.Devices()
+		d, known := devices[t.Device]
+		switch {
+		case err != nil:
+			note = "STF: " + err.Error()
+		case !known:
+			note = "not a device of STF"
+		case !d.Present:
+			note = "disconnected in STF"
+		case d.Busy:
+			note = "in use"
+			if d.Owner != "" {
+				note += " by " + d.Owner
+			}
+		default:
+			s.jobs.update(func() { t.Note = "" })
+			return true
+		}
+		if !opts.Until.IsZero() && time.Now().After(opts.Until) {
+			s.skip(t, stepSkipped, note+": the window ended")
+			return false
+		}
+		s.jobs.update(func() { t.Note = note + ", waiting" })
+		select {
+		case <-time.After(freePoll):
+		case <-job.cancel:
+			s.skip(t, stepCancelled, "")
+			return false
+		}
+	}
+}
+
 // runTarget runs the actions on one device one by one; a failed action does not stop the next ones (they are
 // independent settings); iOS refreshes the installed profiles once at the end
-func (s *Server) runTarget(platform string, t *Target, actions []state.Action) {
+func (s *Server) runTarget(job *Job, platform string, t *Target, actions []state.Action) {
 	s.jobs.update(func() { t.Status = stepRunning })
 	profiles := false
 	for i, a := range actions {
+		select {
+		case <-job.cancel:
+			s.skip(t, stepCancelled, "")
+			return
+		default:
+		}
 		step := t.Steps[i]
 		s.jobs.update(func() { step.Status = stepRunning })
 		var status, output, uuid string
@@ -283,6 +415,10 @@ func (s *Server) iosAction(udid string, a state.Action) (status, output, uuid st
 	case "preset":
 		p, _ := profile.FindPreset(a.Name)
 		if a.On {
+			// a saved set has no password: the UI asks for it (empty for an open network), the job never guesses
+			if _, given := a.Params["password"]; slices.Contains(p.Params, "password") && !given {
+				return stepError, "the password is not stored: apply it from the admin UI, it asks for the password", ""
+			}
 			return s.installPreset(udid, p, a.Params)
 		}
 		return s.removePreset(udid, p)
@@ -411,16 +547,22 @@ func (s *Server) jobStart(w http.ResponseWriter, _ *http.Request, body map[strin
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
-	job, err := s.startJob(str(body, "platform"), str(body, "title"), stringList(body["devices"]), list)
+	var opts JobOptions
+	opts.FreeOnly, _ = body["free_only"].(bool)
+	for key, at := range map[string]*time.Time{"start_at": &opts.StartAt, "until": &opts.Until} {
+		if v := str(body, key); v != "" {
+			if *at, err = time.Parse(time.RFC3339, v); err != nil {
+				fail(w, http.StatusBadRequest, fmt.Errorf("%s: an RFC 3339 time", key))
+				return
+			}
+		}
+	}
+	job, err := s.startJob(str(body, "platform"), str(body, "title"), stringList(body["devices"]), list, opts)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
 	reply(w, http.StatusOK, map[string]string{"id": job.ID})
-}
-
-func (s *Server) setsView(w http.ResponseWriter, _ *http.Request) {
-	reply(w, http.StatusOK, s.State.Sets())
 }
 
 // setSave: {platform, name, actions: [...]}; the password of a preset is never stored
@@ -447,4 +589,74 @@ func (s *Server) setDelete(w http.ResponseWriter, _ *http.Request, body map[stri
 	}
 	s.Log.Info("set deleted", "platform", str(body, "platform"), "name", str(body, "name"))
 	reply(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) jobCancel(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+	if err := s.jobs.stop(str(body, "id")); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	s.Log.Info("job cancelled", "job", str(body, "id"))
+	reply(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// setsView: the saved sets and the sets assigned to the devices
+func (s *Server) setsAll(w http.ResponseWriter, _ *http.Request) {
+	reply(w, http.StatusOK, map[string]any{"sets": s.State.Sets(), "assigned": s.State.Assigned()})
+}
+
+// setAssign: {platform, name, devices}; an empty name removes the sets of the devices
+func (s *Server) setAssign(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+	devices := stringList(body["devices"])
+	if len(devices) == 0 {
+		fail(w, http.StatusBadRequest, errors.New("no device"))
+		return
+	}
+	if err := s.State.Assign(str(body, "platform"), str(body, "name"), devices); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	s.Log.Info("set assigned", "platform", str(body, "platform"), "name", str(body, "name"), "devices", len(devices))
+	reply(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// setDefault: {platform, name}; an empty name: no default set
+func (s *Server) setDefault(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+	if err := s.State.SetDefault(str(body, "platform"), str(body, "name")); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	s.Log.Info("default set", "platform", str(body, "platform"), "name", str(body, "name"))
+	reply(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// Enrolled applies the set of a device enrolled anew (iOS: after its TokenUpdate, Android: a new device of Headwind
+// MDM): its assigned set, else the default set of the platform, which becomes its set
+func (s *Server) Enrolled(platform, device string) {
+	set, assigned, ok := s.State.SetOf(platform, device)
+	if !ok {
+		return
+	}
+	if !assigned {
+		if err := s.State.Assign(platform, set.Name, []string{device}); err != nil {
+			s.Log.Error("default set not assigned", "device", device, "err", err)
+		}
+	}
+	if _, err := s.startJob(platform, fmt.Sprintf("Set %q (enrollment)", set.Name), []string{device}, set.Actions, JobOptions{}); err != nil {
+		s.Log.Error("the set of the enrollment not applied", "device", device, "set", set.Name, "err", err)
+	}
+}
+
+// farm: the devices of STF (names, nodes, locations, users) by serial
+func (s *Server) farm(w http.ResponseWriter, _ *http.Request) {
+	if s.STF == nil {
+		reply(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	devices, err := s.STF.Devices()
+	view := map[string]any{"enabled": true, "devices": devices}
+	if err != nil {
+		view["error"] = err.Error()
+	}
+	reply(w, http.StatusOK, view)
 }

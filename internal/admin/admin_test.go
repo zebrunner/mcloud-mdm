@@ -85,6 +85,12 @@ func hook(base, topic string, body map[string]any, report map[string]any) {
 
 func setup(t *testing.T) (*fakeHub, *httptest.Server, *state.Store) {
 	t.Helper()
+	hub, srv, st, _ := setupServer(t)
+	return hub, srv, st
+}
+
+func setupServer(t *testing.T) (*fakeHub, *httptest.Server, *state.Store, *Server) {
+	t.Helper()
 	hub := &fakeHub{}
 	hubSrv := httptest.NewServer(hub)
 	t.Cleanup(hubSrv.Close)
@@ -100,7 +106,7 @@ func setup(t *testing.T) (*fakeHub, *httptest.Server, *state.Store) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	hub.admin = srv.URL
-	return hub, srv, st
+	return hub, srv, st, s
 }
 
 func postJSON(t *testing.T, url string, body any, headers ...string) (int, map[string]any) {

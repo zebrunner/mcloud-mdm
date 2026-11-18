@@ -159,6 +159,8 @@ func (f *fakeCommander) Send(udid, requestType string, args map[string]any) (str
 	return "CMD-1", nil
 }
 
+func (f *fakeCommander) Enrolled(platform, device string) {}
+
 func post(t *testing.T, url, token string) (int, []byte) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, url, nil)

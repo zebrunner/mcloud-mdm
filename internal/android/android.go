@@ -122,6 +122,8 @@ type Setup struct {
 	ADB       []string `json:"adb"`
 	Configure string   `json:"configure"`
 	Release   string   `json:"release"`
+	// New: the device was not a device of the server (the default set of the admin UI applies)
+	New bool `json:"new"`
 }
 
 // ReleaseCommand is the adb shell command that releases the device without the server (the token is the secret).
@@ -188,6 +190,7 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 	if err != nil {
 		return nil, err
 	}
+	fresh := dev == nil
 	if dev == nil {
 		dev = &headwind.Device{Number: serial}
 	}
@@ -199,7 +202,7 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 		ConfigurationID: dev.ConfigurationID}); err != nil {
 		return nil, err
 	}
-	s := &Setup{Serial: serial, BaseURL: m.PublicURL, Secret: m.Secret, AgentURL: agentURL}
+	s := &Setup{Serial: serial, BaseURL: m.PublicURL, Secret: m.Secret, AgentURL: agentURL, New: fresh}
 	// the agent takes the host and the path apart: --arg <scheme://host>, serverProject <path>
 	base, project := m.PublicURL, ""
 	if u, err := url.Parse(m.PublicURL); err == nil && strings.Trim(u.Path, "/") != "" {

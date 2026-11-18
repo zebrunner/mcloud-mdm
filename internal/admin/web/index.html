@@ -114,9 +114,16 @@
       <button class="small" id="selInvert" title="Invert the selection of the devices shown">Invert</button>
       <button class="small" id="selProblems" title="Select the devices that need attention: not managed, left MDM, waiting">Problems</button>
     </div>
+    <div class="row">
+      <select id="nodeFilter" title="the host of the device (STF)"><option value="">all nodes</option></select>
+      <select id="locationFilter" title="the location of mcloud-agent (STF)"><option value="">all locations</option></select>
+      <span class="spacer"></span>
+      <button class="small" id="selFree" title="Select the devices shown that are connected and nobody uses in STF">Free</button>
+      <button class="small" id="selDiffers" title="Select the devices shown whose settings differ from their set">Differ from their set</button>
+    </div>
     <div class="devices">
       <table>
-        <thead><tr><th><input type="checkbox" id="checkAll" title="All shown"></th><th>Device</th><th>Model / OS</th><th>Status</th><th class="nowrap">Seen</th><th>Settings on</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="checkAll" title="All shown"></th><th>Device</th><th>Model / OS</th><th>Node / location</th><th>Status</th><th>Set</th><th>Settings on</th></tr></thead>
         <tbody id="devices"></tbody>
       </table>
     </div>
@@ -159,7 +166,8 @@
     </div>
 
     <div id="tab-sets" style="display:none">
-      <div class="muted">A set is a list of settings and commands; Apply runs it on the selected devices, Edit loads it into Settings.</div>
+      <div class="muted">A set is a list of settings and commands. Apply runs it on the selected devices; Assign makes it the set of the selected devices (the table shows their differences, a new enrollment applies it); the default set is assigned and applied to every new device.</div>
+      <div class="row"><button class="small" id="unassign" title="The selected devices follow no set">Unassign the selected devices</button></div>
       <div id="sets"></div>
     </div>
   </section>
@@ -291,6 +299,17 @@ const RAW_PRESETS = [
   ["NanoHUB: version", "GET", "version", "", ""],
 ];
 
+// the marketing names of the iPhones (ProductType)
+const MODELS = {"iPhone10,1": "iPhone 8", "iPhone10,4": "iPhone 8", "iPhone10,2": "iPhone 8 Plus", "iPhone10,5": "iPhone 8 Plus",
+  "iPhone10,3": "iPhone X", "iPhone10,6": "iPhone X", "iPhone11,2": "iPhone XS", "iPhone11,4": "iPhone XS Max", "iPhone11,6": "iPhone XS Max",
+  "iPhone11,8": "iPhone XR", "iPhone12,1": "iPhone 11", "iPhone12,3": "iPhone 11 Pro", "iPhone12,5": "iPhone 11 Pro Max",
+  "iPhone12,8": "iPhone SE (2nd)", "iPhone13,1": "iPhone 12 mini", "iPhone13,2": "iPhone 12", "iPhone13,3": "iPhone 12 Pro",
+  "iPhone13,4": "iPhone 12 Pro Max", "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max", "iPhone14,4": "iPhone 13 mini",
+  "iPhone14,5": "iPhone 13", "iPhone14,6": "iPhone SE (3rd)", "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
+  "iPhone15,2": "iPhone 14 Pro", "iPhone15,3": "iPhone 14 Pro Max", "iPhone15,4": "iPhone 15", "iPhone15,5": "iPhone 15 Plus",
+  "iPhone16,1": "iPhone 15 Pro", "iPhone16,2": "iPhone 15 Pro Max", "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max",
+  "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus", "iPhone17,5": "iPhone 16e"};
+
 const QUICK = {ios: ["DeviceInformation", "ProfileList", "InstalledApplicationList", "Settings: TimeZone", "RestartDevice"],
                android: ["sync", "run-app", "clear-app-data", "grant-permissions", "run-command", "reboot"]};
 
@@ -299,7 +318,7 @@ const P = {
   ios: {devices: [], presets: [], commands: [], selected: new Set(), focus: "", form: {}, params: {}, extra: [], setName: "", raw: null},
   android: {devices: [], presets: [], commands: [], selected: new Set(), focus: "", form: {}, params: {}, extra: [], setName: "", raw: null, log: []},
 };
-let view = "ios", sets = [], jobsList = [], focusCommand = "", openJobs = new Set();
+let view = "ios", sets = [], assigned = {ios: {}, android: {}}, farm = {enabled: false, devices: {}}, jobsList = [], focusCommand = "", openJobs = new Set();
 const cur = () => P[view];
 
 function toast(text, ms = 4000) { const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms); }
@@ -326,12 +345,14 @@ function ask(text, fields = [], ok = "OK") {
   $("dialogText").textContent = text; $("dialogOk").textContent = ok;
   const box = $("dialogFields"); box.innerHTML = "";
   const inputs = fields.map(f => {
-    const i = el("input", {type: f.type || "text", value: f.value || "", placeholder: f.placeholder || "", autocomplete: "off"});
-    box.append(el("label", {}, f.label, i)); return [f.key, i];
+    const i = el("input", {type: f.type || "text", placeholder: f.placeholder || "", autocomplete: "off", title: f.title || ""});
+    if (f.type === "checkbox") { i.checked = !!f.value; box.append(el("label", {style: "flex-direction:row; align-items:center; gap:6px"}, i, f.label)); }
+    else { i.value = f.value || ""; box.append(el("label", {}, f.label, i)); }
+    return [f.key, i];
   });
   d.returnValue = "";
-  d.showModal(); if (inputs.length) inputs[0][1].focus();
-  return new Promise(res => d.onclose = () => res(d.returnValue === "ok" ? Object.fromEntries(inputs.map(([k, i]) => [k, i.value])) : null));
+  d.showModal(); if (inputs.length && inputs[0][1].type !== "checkbox") inputs[0][1].focus();
+  return new Promise(res => d.onclose = () => res(d.returnValue === "ok" ? Object.fromEntries(inputs.map(([k, i]) => [k, i.type === "checkbox" ? i.checked : i.value])) : null));
 }
 
 /* ---------- devices ---------- */
@@ -344,7 +365,7 @@ function iosRows(st) {
     const known = seen && !seen.stale;
     const presets = {};
     for (const p of P.ios.presets) presets[p.name] = known ? (seen.ids || []).includes(p.identifier) : null;
-    return {id: d.udid, name: d.name || "", model: d.product || "", os: d.os_version ? "iOS " + d.os_version : "",
+    return {id: d.udid, name: d.name || "", model: MODELS[d.product] || d.product || "", os: d.os_version ? "iOS " + d.os_version : "",
       status: enrolled ? [["enrolled", "on"]] : [[d.checked_out ? "left MDM" : "enrolling", "off"]],
       problem: !enrolled, enrolled, seen: d.last_seen_at, presets, raw: d,
       note: known ? "" : "profiles unknown: ProfileList"};
@@ -362,9 +383,46 @@ function androidRows(a) {
   });
 }
 
+// withFarm: the name, node, location and user of STF, the set of the device and its differences
+function withFarm(platform, rows) {
+  const set = (name) => sets.find(s => s.platform === platform && s.name === name);
+  for (const d of rows) {
+    const f = farm.devices[d.id] || {};
+    d.name ||= f.name || ""; d.node = f.node || ""; d.location = f.location || ""; d.stf = farm.devices[d.id];
+    d.free = !!(d.stf && d.stf.present && !d.stf.busy);
+    d.set = assigned[platform][d.id] || ""; d.differs = 0; d.unknown = 0;
+    const s = d.set && set(d.set);
+    if (s) for (const a of s.actions) {
+      if (a.kind !== "preset") continue;
+      const have = d.presets[a.name];
+      if (have === null || have === undefined) d.unknown++; else if (have !== a.on) d.differs++;
+    }
+  }
+  return rows;
+}
+
 function shown() {
-  const f = $("filter").value.trim().toLowerCase();
-  return cur().devices.filter(d => !f || [d.name, d.id, d.model, d.os, d.raw.serial].join(" ").toLowerCase().includes(f));
+  const f = $("filter").value.trim().toLowerCase(), node = $("nodeFilter").value, loc = $("locationFilter").value;
+  return cur().devices.filter(d => (!f || [d.name, d.id, d.model, d.os, d.raw.serial, d.node, d.location, d.set].join(" ").toLowerCase().includes(f)) &&
+    (!node || d.node === node) && (!loc || d.location === loc || d.location.startsWith(loc + "_")));
+}
+
+// the node and location filters list the values of the devices of the platform; a location S1_E1 also gives S1
+function buildFilters() {
+  for (const [id, key, all] of [["nodeFilter", "node", "all nodes"], ["locationFilter", "location", "all locations"]]) {
+    const sel = $(id), was = sel.value || localStorage.getItem(id + "-" + view) || "";
+    const values = new Set();
+    for (const d of cur().devices) {
+      if (!d[key]) continue;
+      values.add(d[key]);
+      if (key === "location") { const parts = d[key].split("_"); for (let i = 1; i < parts.length; i++) values.add(parts.slice(0, i).join("_")); }
+    }
+    sel.replaceChildren(el("option", {value: "", text: all}), ...[...values].sort().map(v => el("option", {value: v, text: v})));
+    sel.value = values.has(was) ? was : "";
+    sel.style.display = values.size || !farm.enabled ? "" : "none";
+    sel.disabled = !farm.enabled;
+    sel.title = farm.enabled ? sel.title : "no STF: MDM_STF_URL";
+  }
 }
 
 function saveSelection() { localStorage.setItem("sel-" + view, JSON.stringify([...cur().selected])); }
@@ -376,7 +434,7 @@ function renderDevices() {
   // drop the devices that are gone
   for (const id of [...p.selected]) if (!p.devices.some(d => d.id === id)) p.selected.delete(id);
   box.innerHTML = "";
-  if (!p.devices.length) box.append(el("tr", {}, el("td", {colspan: 6, class: "empty", text: view === "ios" ? "no iOS device enrolled yet" : (p.raw && !p.raw.enabled ? "Android is off: HMDM_URL is not set" : "no Android device yet")})));
+  if (!p.devices.length) box.append(el("tr", {}, el("td", {colspan: 7, class: "empty", text: view === "ios" ? "no iOS device enrolled yet" : (p.raw && !p.raw.enabled ? "Android is off: HMDM_URL is not set" : "no Android device yet")})));
   for (const d of rows) {
     const check = el("input", {type: "checkbox"}); check.checked = p.selected.has(d.id);
     check.onclick = (e) => { e.stopPropagation(); check.checked ? p.selected.add(d.id) : p.selected.delete(d.id); saveSelection(); renderSelection(); tr.classList.toggle("checked", check.checked); };
@@ -385,9 +443,11 @@ function renderDevices() {
     const tr = el("tr", {class: "click" + (check.checked ? " checked" : "") + (p.focus === d.id ? " focus" : ""), title: "click: details; the checkbox selects"},
       el("td", {}, check),
       el("td", {}, el("div", {text: d.name || "-"}), el("div", {class: "muted udid", text: d.id})),
-      el("td", {}, el("div", {text: d.model}), el("div", {class: "muted", text: [d.os, d.battery !== undefined && d.battery !== null ? d.battery + "%" : ""].filter(Boolean).join(", ")})),
-      el("td", {}, ...d.status.map(([t, c]) => el("span", {class: "tag " + c, text: t}))),
-      el("td", {class: "nowrap", title: d.seen ? time(d.seen) : ""}, ago(d.seen)),
+      el("td", {}, el("div", {text: d.model, title: d.raw.product || ""}), el("div", {class: "muted", text: [d.os, d.battery !== undefined && d.battery !== null ? d.battery + "%" : ""].filter(Boolean).join(", ")})),
+      el("td", {}, el("div", {text: d.node || "-"}), el("div", {class: "muted", text: d.location})),
+      el("td", {}, ...d.status.map(([t, c]) => el("span", {class: "tag " + c, text: t})), stfTag(d),
+        el("div", {class: "muted", title: d.seen ? time(d.seen) : "", text: (view === "ios" ? "seen " : "sync ") + ago(d.seen)})),
+      el("td", {}, d.set ? el("div", {text: d.set}) : el("span", {class: "muted", text: "-"}), d.set ? setTag(d) : null),
       el("td", {}, ...(unknown ? [el("span", {class: "tag", title: "no ProfileList since the last enrollment: Commands, ProfileList", text: "?"})] : on)));
     tr.onclick = () => setFocus(d.id);
     box.append(tr);
@@ -396,6 +456,20 @@ function renderDevices() {
   $("checkAll").checked = !!all; $("checkAll").indeterminate = !all && rows.some(d => p.selected.has(d.id));
   $("devicesHint").textContent = rows.length < p.devices.length ? `${rows.length} of ${p.devices.length} shown` : "";
   renderSelection();
+}
+
+function stfTag(d) {
+  if (!farm.enabled) return null;
+  if (!d.stf) return el("span", {class: "tag", title: "STF does not know the device", text: "not in STF"});
+  if (!d.stf.present) return el("span", {class: "tag off", text: "disconnected"});
+  if (d.stf.busy) return el("span", {class: "tag wait", title: d.stf.owner ? "used by " + d.stf.owner : "used", text: "in use"});
+  return el("span", {class: "tag", text: "free"});
+}
+
+function setTag(d) {
+  if (d.differs) return el("span", {class: "tag off", title: "settings differ from the set: Saved sets, Fix", text: `differs: ${d.differs}`});
+  if (d.unknown) return el("span", {class: "tag", title: "the state of some settings is unknown (ProfileList)", text: "?"});
+  return el("span", {class: "tag on", text: "as the set"});
 }
 
 function targets() { return cur().devices.filter(d => cur().selected.has(d.id)); }
@@ -516,8 +590,7 @@ function dangerous(actions) {
 }
 
 // runActions: asks for the missing secrets and a confirmation, then starts the job
-async function runActions(actions, title) {
-  const devs = targets();
+async function runActions(actions, title, devs = targets()) {
   if (!devs.length) return toast("select the devices first");
   if (!actions.length) return toast("nothing to apply");
   for (const a of actions) {
@@ -533,9 +606,17 @@ async function runActions(actions, title) {
   const danger = dangerous(actions);
   let text = `${title ? title + "\n\n" : ""}${describe(actions)}\n\non ${devs.length} device${devs.length > 1 ? "s" : ""}: ${devs.slice(0, 6).map(d => d.name || short(d.id)).join(", ")}${devs.length > 6 ? ", ..." : ""}`;
   if (danger.length) text += `\n\nChanges the devices: ${danger.join(", ")}.` + (danger.includes("Wi-Fi of the allowed network only") ? " A wrong SSID or password leaves a device without Wi-Fi and MDM until the agent of its host recovers it over USB." : "");
-  if (await ask(text, [], danger.length ? "Run anyway" : "Run") === null) return;
+  const opts = await ask(text, [
+    {key: "free", type: "checkbox", value: farm.enabled && localStorage.getItem("freeOnly") === "1", label: farm.enabled ? "only free devices: wait until nobody uses a device in STF" : "only free devices (no STF: MDM_STF_URL)"},
+    {key: "start", type: "datetime-local", label: "start at (empty: now)"},
+    {key: "until", type: "datetime-local", label: "end of the window (empty: no end): devices still busy then are skipped"},
+  ], danger.length ? "Run anyway" : "Run");
+  if (opts === null) return;
+  localStorage.setItem("freeOnly", opts.free ? "1" : "");
+  const iso = (v) => v ? new Date(v).toISOString() : "";
   try {
-    const r = await call("api/jobs", {platform: view, title: title || "", devices: devs.map(d => d.id), actions});
+    const r = await call("api/jobs", {platform: view, title: title || "", devices: devs.map(d => d.id), actions,
+      free_only: !!opts.free && farm.enabled, start_at: iso(opts.start), until: iso(opts.until)});
     openJobs.add(r.id); toast(`job ${r.id} started on ${devs.length} device${devs.length > 1 ? "s" : ""}`);
     showActivity("jobs"); refreshJobs();
   } catch (e) { toast("error: " + e.message, 8000); }
@@ -563,15 +644,32 @@ function renderSets() {
   const box = $("sets"); box.innerHTML = "";
   const list = sets.filter(s => s.platform === view);
   if (!list.length) box.append(el("div", {class: "empty", text: "no saved set yet: choose the settings in Settings, then Save as set"}));
+  const sel = targets();
+  $("unassign").disabled = !sel.length;
   for (const s of list) {
-    const apply = el("button", {class: "primary small set-apply", text: "Apply", onclick: () => runActions(s.actions.map(a => ({...a, params: a.params ? {...a.params} : undefined})), `Set "${s.name}"`)});
-    apply.disabled = !targets().length;
+    const copy = () => s.actions.map(a => ({...a, params: a.params ? {...a.params} : undefined}));
+    const members = cur().devices.filter(d => d.set === s.name), differ = members.filter(d => d.differs);
+    const apply = el("button", {class: "primary small set-apply", text: "Apply", title: "run the set on the selected devices", onclick: () => runActions(copy(), `Set "${s.name}"`)});
+    apply.disabled = !sel.length;
+    const assign = el("button", {class: "small set-apply", text: "Assign", title: "the selected devices follow this set", onclick: async () => {
+      try { await call("api/sets/assign", {platform: s.platform, name: s.name, devices: targets().map(d => d.id)}); toast(`"${s.name}" assigned to ${targets().length} devices`); refreshSets(); }
+      catch (e) { toast("error: " + e.message); }
+    }});
+    assign.disabled = !sel.length;
+    const fix = el("button", {class: "small", text: `Fix ${differ.length}`, title: "apply the settings of the set (not its commands) to its devices that differ from it",
+      onclick: () => runActions(copy().filter(a => a.kind === "preset"), `Fix to the set "${s.name}"`, differ)});
+    fix.disabled = !differ.length;
+    const def = el("button", {class: "small" + (s.default ? " primary" : ""), text: s.default ? "Default" : "Make default",
+      title: s.default ? "every new device gets this set; click: no default set" : "every new device of the platform gets this set (assigned and applied at its enrollment)",
+      onclick: async () => { try { await call("api/sets/default", {platform: s.platform, name: s.default ? "" : s.name}); refreshSets(); } catch (e) { toast("error: " + e.message); } }});
     box.append(el("div", {class: "set"},
-      el("div", {class: "row"}, el("span", {class: "name", text: s.name}), el("span", {class: "muted", text: `${s.actions.length} action${s.actions.length > 1 ? "s" : ""}, saved ${time(s.updated_at)}`}), el("span", {class: "spacer"}),
-        apply,
+      el("div", {class: "row"}, el("span", {class: "name", text: s.name}),
+        el("span", {class: "muted", text: `${s.actions.length} action${s.actions.length > 1 ? "s" : ""}, ${members.length} device${members.length === 1 ? "" : "s"}${differ.length ? `, ${differ.length} differ` : ""}`}),
+        el("span", {class: "spacer"}), def),
+      el("div", {class: "row"}, apply, assign, fix,
         el("button", {class: "small", text: "Edit", title: "load it into Settings", onclick: () => loadSet(s)}),
         el("button", {class: "small danger", text: "Delete", onclick: async () => {
-          if (await ask(`Delete the set "${s.name}"?`, [], "Delete") === null) return;
+          if (await ask(`Delete the set "${s.name}"? Its devices follow no set then.`, [], "Delete") === null) return;
           try { await call("api/sets/delete", {platform: s.platform, name: s.name}); refreshSets(); } catch (e) { toast("error: " + e.message); }
         }})),
       el("div", {class: "muted", style: "white-space:pre-line", text: describe(s.actions)})));
@@ -664,8 +762,13 @@ function renderJobs() {
     const det = el("details", {class: "job"});
     det.open = openJobs.has(j.id);
     det.ontoggle = () => det.open ? openJobs.add(j.id) : openJobs.delete(j.id);
-    det.append(el("summary", {}, el("b", {text: j.title}), el("span", {class: "muted", text: `${time(j.created_at)} - ${n} device${n > 1 ? "s" : ""}`}), bar, ...counts,
-      el("span", {class: "muted", text: j.finished_at ? "finished" : "running..."})));
+    const when = [j.start_at && new Date(j.start_at) > new Date() ? "starts " + time(j.start_at) : "", j.free_only ? "free devices only" : "", j.until ? "until " + time(j.until) : ""].filter(Boolean).join(", ");
+    const cancel = !j.finished_at && !j.cancelled ? el("button", {class: "small danger", text: "Cancel", title: "the devices not reached yet are skipped", onclick: async (e) => {
+      e.preventDefault();
+      try { await call("api/jobs/cancel", {id: j.id}); refreshJobs(); } catch (err) { toast("error: " + err.message); }
+    }}) : null;
+    det.append(el("summary", {}, el("b", {text: j.title}), el("span", {class: "muted", text: `${time(j.created_at)} - ${n} device${n > 1 ? "s" : ""}${when ? " - " + when : ""}`}), bar, ...counts,
+      el("span", {class: "muted", text: j.finished_at ? (j.cancelled ? "cancelled" : "finished") : "running..."}), cancel));
     const table = el("table", {}, el("thead", {}, el("tr", {}, el("th", {text: "Device"}), el("th", {text: "Status"}), el("th", {text: "Steps"}))));
     const body = el("tbody");
     for (const t of j.targets) {
@@ -676,7 +779,8 @@ function renderJobs() {
         if (s.uuid) line.append(el("button", {class: "small", text: "report", onclick: () => { focusCommand = s.uuid; renderDetails(); $("details").scrollIntoView({behavior: "smooth"}); }}));
         steps.append(line);
       }
-      body.append(el("tr", {}, el("td", {}, ...(P[j.platform].devices.some(d => d.id === t.device && d.name) ? [el("div", {text: deviceName(j.platform, t.device)})] : []), el("div", {class: "muted udid", text: t.device})), el("td", {class: t.status, text: t.status}), el("td", {}, steps)));
+      body.append(el("tr", {}, el("td", {}, ...(P[j.platform].devices.some(d => d.id === t.device && d.name) ? [el("div", {text: deviceName(j.platform, t.device)})] : []), el("div", {class: "muted udid", text: t.device})),
+        el("td", {}, el("div", {class: t.status, text: t.status}), t.note ? el("div", {class: "muted", text: t.note}) : null), el("td", {}, steps)));
     }
     table.append(body); det.append(table);
     box.append(det);
@@ -760,7 +864,7 @@ function renderDetails() {
 async function refreshIOS() {
   try {
     const st = await call("api/state"); P.ios.raw = st;
-    P.ios.devices = iosRows(st);
+    P.ios.devices = withFarm("ios", iosRows(st));
     $("topic").textContent = st.server.topic || "no push certificate";
     $("pushExp").textContent = st.server.push_not_after || "-";
     $("mdmUrl").textContent = st.server.mdm_url; $("enrollUrl").textContent = st.server.enroll_url;
@@ -772,7 +876,7 @@ async function refreshAndroid() {
   try {
     const a = await call("api/android"); P.android.raw = a;
     if (a.enabled) { P.android.presets = a.presets; P.android.commands = a.commands; }
-    P.android.devices = androidRows(a);
+    P.android.devices = withFarm("android", androidRows(a));
     $("androidServer").textContent = !a.enabled ? "off (HMDM_URL)" : a.server + (a.error ? " - ERROR: " + a.error : "");
     $("androidAgent").textContent = a.agent_url || "no APK (MDM_ANDROID_AGENT_APK)";
   } catch (e) { $("androidServer").textContent = "error: " + e.message; }
@@ -787,7 +891,12 @@ async function refreshAndroidLog() {
 }
 
 async function refreshJobs() { try { jobsList = await call("api/jobs"); } catch (e) { return; } if (view !== "server") renderJobs(); }
-async function refreshSets() { try { sets = await call("api/sets"); } catch (e) { return; } if (view !== "server") renderSets(); }
+async function refreshSets() {
+  try { const r = await call("api/sets"); sets = r.sets; assigned = r.assigned; } catch (e) { return; }
+  for (const p of ["ios", "android"]) withFarm(p, P[p].devices);
+  if (view !== "server") { renderSets(); renderDevices(); }
+}
+async function refreshFarm() { try { farm = await call("api/farm"); farm.devices ||= {}; } catch (e) { farm = {enabled: false, devices: {}}; } }
 
 function headerInfo() {
   const box = $("headerInfo"); box.innerHTML = "";
@@ -796,12 +905,13 @@ function headerInfo() {
     box.append(el("span", {class: days < 30 ? "warn" : ""}, "Push certificate ", el("b", {text: exp ? `until ${exp.slice(0, 10)}` : "missing: Server"})));
   }
   if (view === "android" && P.android.raw) box.append(el("span", {}, "Headwind MDM ", el("b", {text: P.android.raw.enabled ? (P.android.raw.error ? "ERROR" : "ok") : "off"})));
+  if (view !== "server") box.append(el("span", {class: farm.error ? "warn" : "", style: "margin-left:16px"}, "STF ", el("b", {text: !farm.enabled ? "off (MDM_STF_URL)" : farm.error ? "ERROR: " + farm.error : "ok"})));
 }
 
 function renderAll() {
   headerInfo();
   if (view === "server") return renderServer();
-  renderDevices(); renderJobs(); renderHistory(); renderEvents(); renderDetails(); renderSets();
+  buildFilters(); renderDevices(); renderJobs(); renderHistory(); renderEvents(); renderDetails(); renderSets();
 }
 
 function renderServer() {
@@ -826,11 +936,13 @@ function showView(v) {
 }
 
 async function tick() {
+  await refreshFarm();
+  await refreshSets();
   if (view === "ios" || view === "server") await refreshIOS();
   if (view === "android") await refreshAndroid();
   await refreshJobs();
-  if (view === "ios") { renderDevices(); renderHistory(); renderEvents(); renderDetails(); headerInfo(); }
-  if (view === "android") { renderDevices(); renderHistory(); renderDetails(); headerInfo(); }
+  if (view === "ios") { buildFilters(); renderDevices(); renderHistory(); renderEvents(); renderDetails(); renderSets(); headerInfo(); }
+  if (view === "android") { buildFilters(); renderDevices(); renderHistory(); renderDetails(); renderSets(); headerInfo(); }
   if (view === "server") renderServer();
 }
 
@@ -838,13 +950,21 @@ async function init() {
   P.ios.commands = await call("api/catalog");
   P.ios.presets = await call("api/presets");
   loadSelection("ios"); loadSelection("android");
-  await Promise.all([refreshIOS(), refreshAndroid(), refreshSets(), refreshJobs()]);
+  await refreshFarm();
+  await Promise.all([refreshIOS(), refreshAndroid(), refreshJobs()]);
+  await refreshSets();
 
   $("filter").oninput = () => { localStorage.setItem("filter-" + view, $("filter").value); renderDevices(); };
   $("selAll").onclick = () => selectRows(() => true);
   $("selNone").onclick = () => selectRows(() => false);
   $("selInvert").onclick = () => selectRows(d => !cur().selected.has(d.id));
   $("selProblems").onclick = () => selectRows(d => d.problem);
+  $("selFree").onclick = () => selectRows(d => d.free);
+  $("selDiffers").onclick = () => selectRows(d => d.differs > 0);
+  for (const id of ["nodeFilter", "locationFilter"]) $(id).onchange = () => { localStorage.setItem(id + "-" + view, $(id).value); renderDevices(); };
+  $("unassign").onclick = async () => {
+    try { await call("api/sets/assign", {platform: view, name: "", devices: targets().map(d => d.id)}); toast("unassigned"); refreshSets(); } catch (e) { toast("error: " + e.message); }
+  };
   $("checkAll").onclick = () => selectRows(() => $("checkAll").checked);
   document.querySelectorAll("#actionTabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
   document.querySelectorAll("#activityTabs button").forEach(b => b.onclick = () => showActivity(b.dataset.tab));

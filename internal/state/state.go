@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,6 +72,9 @@ type Data struct {
 	Sets []*Set `json:"sets,omitempty"`
 	// Names are the names of the devices on their hosts, also of the devices not enrolled yet
 	Names map[string]string `json:"names,omitempty"`
+	// Assigned are the sets of the devices by platform: a device follows its set (the UI shows the differences, a new
+	// enrollment applies it)
+	Assigned map[string]map[string]string `json:"assigned,omitempty"`
 }
 
 // Action is a step of a set of settings or of a job: a preset on or off, or a command.
@@ -92,6 +96,8 @@ type Set struct {
 	Platform  string   `json:"platform"`
 	Actions   []Action `json:"actions"`
 	UpdatedAt string   `json:"updated_at,omitempty"`
+	// Default: a new device of the platform gets the set (assigned and applied at its enrollment); one per platform
+	Default bool `json:"default,omitempty"`
 }
 
 // Secret parameters are never stored in a set: the UI asks for them when it applies the set
@@ -125,6 +131,9 @@ func Open(dir string) (*Store, error) {
 	}
 	if s.data.Names == nil {
 		s.data.Names = map[string]string{}
+	}
+	if s.data.Assigned == nil {
+		s.data.Assigned = map[string]map[string]string{}
 	}
 	// a device of a name only (an enrollment profile request, no enrollment): its name only
 	for udid, d := range s.data.Devices {
@@ -423,12 +432,83 @@ func (s *Store) SaveSet(set Set) error {
 	set.UpdatedAt = s.now()
 	for i, old := range s.data.Sets {
 		if old.Platform == set.Platform && old.Name == set.Name {
+			set.Default = old.Default
 			s.data.Sets[i] = &set
 			return s.save()
 		}
 	}
+	set.Default = false
 	s.data.Sets = append(s.data.Sets, &set)
 	return s.save()
+}
+
+// SetDefault makes the set the default of its platform; an empty name: no default.
+func (s *Store) SetDefault(platform, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := name == ""
+	for _, set := range s.data.Sets {
+		if set.Platform == platform {
+			set.Default = set.Name == name
+			found = found || set.Default
+		}
+	}
+	if !found {
+		return fmt.Errorf("no set %q of %s", name, platform)
+	}
+	return s.save()
+}
+
+// Assign assigns the set to the devices of the platform; an empty name removes their sets.
+func (s *Store) Assign(platform, name string, devices []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name != "" && !slices.ContainsFunc(s.data.Sets, func(x *Set) bool { return x.Platform == platform && x.Name == name }) {
+		return fmt.Errorf("no set %q of %s", name, platform)
+	}
+	m := s.data.Assigned[platform]
+	if m == nil {
+		m = map[string]string{}
+		s.data.Assigned[platform] = m
+	}
+	for _, d := range devices {
+		if name == "" {
+			delete(m, d)
+		} else {
+			m[d] = name
+		}
+	}
+	return s.save()
+}
+
+// Assigned returns a copy of the sets of the devices by platform.
+func (s *Store) Assigned() map[string]map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]map[string]string{"ios": {}, "android": {}}
+	for p, m := range s.data.Assigned {
+		out[p] = maps.Clone(m)
+	}
+	return out
+}
+
+// SetOf is the set a device follows: its assigned set, else the default set of the platform (assigned reports which).
+func (s *Store) SetOf(platform, device string) (set Set, assigned, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name := s.data.Assigned[platform][device]; name != "" {
+		for _, x := range s.data.Sets {
+			if x.Platform == platform && x.Name == name {
+				return *x, true, true
+			}
+		}
+	}
+	for _, x := range s.data.Sets {
+		if x.Platform == platform && x.Default {
+			return *x, false, true
+		}
+	}
+	return Set{}, false, false
 }
 
 // DeleteSet removes the set of the platform and name.
@@ -438,6 +518,11 @@ func (s *Store) DeleteSet(platform, name string) error {
 	for i, old := range s.data.Sets {
 		if old.Platform == platform && old.Name == name {
 			s.data.Sets = append(s.data.Sets[:i], s.data.Sets[i+1:]...)
+			for d, n := range s.data.Assigned[platform] {
+				if n == name {
+					delete(s.data.Assigned[platform], d)
+				}
+			}
 			return s.save()
 		}
 	}

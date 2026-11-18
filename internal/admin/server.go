@@ -20,6 +20,7 @@ import (
 	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
 	"github.com/zebrunner/mcloud-mdm/internal/profile"
 	"github.com/zebrunner/mcloud-mdm/internal/state"
+	"github.com/zebrunner/mcloud-mdm/internal/stf"
 )
 
 //go:embed web/index.html web/catalog.json
@@ -33,6 +34,8 @@ type Server struct {
 	Log     *slog.Logger
 	// Android is nil without Headwind MDM
 	Android *android.Manager
+	// STF is nil without MDM_STF_URL: no groups, no jobs waiting for free devices
+	STF *stf.Client
 	// AnswerTimeout bounds the wait for the report of a command of a ready profile
 	AnswerTimeout time.Duration
 	// RefreshDelay is the wait after a new enrollment before its DDM notify and ProfileList
@@ -62,7 +65,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/android/log", s.androidLog)
 	mux.HandleFunc("GET /api/jobs", s.jobsView)
 	mux.HandleFunc("POST /api/jobs", s.browser(s.jobStart))
-	mux.HandleFunc("GET /api/sets", s.setsView)
+	mux.HandleFunc("POST /api/jobs/cancel", s.browser(s.jobCancel))
+	mux.HandleFunc("GET /api/sets", s.setsAll)
+	mux.HandleFunc("POST /api/sets/assign", s.browser(s.setAssign))
+	mux.HandleFunc("POST /api/sets/default", s.browser(s.setDefault))
+	mux.HandleFunc("GET /api/farm", s.farm)
 	mux.HandleFunc("POST /api/sets/save", s.browser(s.setSave))
 	mux.HandleFunc("POST /api/sets/delete", s.browser(s.setDelete))
 	mux.HandleFunc("POST /webhook", s.webhook)
