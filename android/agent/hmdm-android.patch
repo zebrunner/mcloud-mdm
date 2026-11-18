@@ -56,6 +56,20 @@ index d935f09..25f05fe 100644
      }
 
      public void skipConfigLoad() {
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java b/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
+index eaf0c90..aa8f24a 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
+@@ -242,8 +242,8 @@ public class Initializer {
+     // Used by InitialSetupActivity
+     @SuppressLint("MissingPermission")
+     public static void applyEarlyNonInteractivePolicies(Context context, ServerConfig config) {
++        // MCloud: the default type too, it removes a policy set before (else a postpone stays forever)
+         if (config.getSystemUpdateType() != null &&
+-                config.getSystemUpdateType() != ServerConfig.SYSTEM_UPDATE_DEFAULT &&
+                 Utils.isDeviceOwner(context)) {
+             Utils.setSystemUpdatePolicy(context, config.getSystemUpdateType(), config.getSystemUpdateFrom(), config.getSystemUpdateTo());
+         }
 diff --git a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
 index 8d9a16f..45682e5 100644
 --- a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
@@ -616,6 +630,21 @@ index a3f58c1..d0f2d47 100644
 
          if (client != null) {
              // Here we go after reconnection.
+diff --git a/app/src/main/java/com/hmdm/launcher/util/Utils.java b/app/src/main/java/com/hmdm/launcher/util/Utils.java
+index 5b16ee4..581dbe6 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/Utils.java
++++ b/app/src/main/java/com/hmdm/launcher/util/Utils.java
+@@ -330,6 +330,10 @@ public class Utils {
+             Log.e(Const.LOG_TAG, "Failed to set system update policy: " + e.getMessage());
+             return;
+         }
++        if (systemUpdateType == ServerConfig.SYSTEM_UPDATE_DEFAULT && currentPolicy == null) {
++            // MCloud: no policy to remove
++            return;
++        }
+         if (currentPolicy != null) {
+             // Check if policy type shouldn't be changed
+             if (systemUpdateType == ServerConfig.SYSTEM_UPDATE_INSTANT && currentPolicy.getPolicyType() == SystemUpdatePolicy.TYPE_INSTALL_AUTOMATIC ||
 diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
 index a075f23..cf3ea8b 100644
 --- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
