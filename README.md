@@ -30,6 +30,8 @@ The MDM service of [MCloud](https://github.com/zebrunner/mcloud) next to [NanoHU
 make build VERSION=0.1
 ```
 
+The images are `public.ecr.aws/zebrunner/mcloud-mdm`: CI publishes every merge into `develop` as `<VERSION>-develop-<sha>` and `<VERSION>-develop-latest` (the newest one), a release is tagged `<VERSION>` by hand (`make push VERSION=<VERSION>`).
+
 ## Run
 
 NanoHUB trusts the SCEP CA of mcloud-mdm (`-ca` of the shared data volume) and posts its webhook to the admin listener:
@@ -37,7 +39,7 @@ NanoHUB trusts the SCEP CA of mcloud-mdm (`-ca` of the shared data volume) and p
 ```yaml
 services:
   mdm:
-    image: public.ecr.aws/zebrunner/mcloud-mdm:0.1
+    image: public.ecr.aws/zebrunner/mcloud-mdm:0.1-develop-latest
     environment:
       MDM_PUBLIC_URL: https://mcloud.example.com
       NANOHUB_URL: http://mdm-nanohub:9004
