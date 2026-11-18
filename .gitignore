@@ -9,3 +9,18 @@
 # <<< mcloud-conventions
 # the project: the binary of make binary
 /bin/
+# the key material of the MDM and the farm, kept out of the checkout anyway (README of mcloud-mdm: Keys and certificates)
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.key
+*.pem
+*.der
+*.csr
+*.mobileconfig
+# a local run: the settings and the data (the SCEP CA, state.json with the unlock tokens)
+.env
+*.env
+/data/
+state.json
