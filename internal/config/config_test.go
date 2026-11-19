@@ -15,6 +15,7 @@ func valid() map[string]string {
 		"MDM_PUBLIC_URL":   "https://mcloud.example.com/",
 		"NANOHUB_API_KEY":  "key",
 		"MDM_ENROLL_TOKEN": "0123456789abcdef",
+		"MDM_ADMIN_TOKEN":  "0123456789abcdef0123456789abcdef",
 	}
 }
 
@@ -45,7 +46,7 @@ func TestInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	for _, name := range []string{"MDM_PUBLIC_URL", "MDM_SCEP_URL", "NANOHUB_API_KEY", "MDM_ENROLL_TOKEN",
+	for _, name := range []string{"MDM_PUBLIC_URL", "MDM_SCEP_URL", "NANOHUB_API_KEY", "MDM_ENROLL_TOKEN", "MDM_ADMIN_TOKEN",
 		"MDM_CHALLENGE_TTL", "MDM_CERT_DAYS", "LOGGER_LEVEL", "MDM_TLS_CA_FILE"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("%s is not reported: %v", name, err)

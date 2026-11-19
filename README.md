@@ -11,7 +11,7 @@ The MDM service of [MCloud](https://github.com/zebrunner/mcloud) next to [NanoHU
 ```
 
 - The device listener (`:8080`) is published by the proxy of MCloud: `/scep`, `/mdm/enroll` and `/healthz`.
-- The admin listener (`:8081`) is never published without the authentication of MCloud: it sends any MDM command to any device. NanoHUB posts its webhook there.
+- The admin listener (`:8081`) takes only the requests with `MDM_ADMIN_TOKEN` (`Authorization: Bearer <token>`, or the token as the password of Basic: a browser asks for it) and is never published without the authentication of MCloud: it sends any MDM command to any device. NanoHUB posts its webhook there, with the token in the userinfo of its webhook URL.
 - An enrollment needs the device on USB once (supervision, then the profile installed with no prompt by the agent: go-ios and the supervision identity); every command afterwards goes over the network and APNs. Apple Business (ADE) is the other way in: the enrollment profile URL is the same.
 - Android: [Headwind MDM](https://github.com/h-mdm/hmdm-server) is the server and the agent of `android/agent` the device owner, set over adb with no factory reset; mcloud-mdm drives Headwind MDM by its API ([Android](#android)).
 
@@ -45,6 +45,7 @@ services:
       NANOHUB_URL: http://mdm-nanohub:9004
       NANOHUB_API_KEY: ${NANOHUB_API_KEY}
       MDM_ENROLL_TOKEN: ${MDM_ENROLL_TOKEN}
+      MDM_ADMIN_TOKEN: ${MDM_ADMIN_TOKEN}
     volumes:
       - mdm-data:/data
   mdm-nanohub:
@@ -54,7 +55,7 @@ services:
       NANOHUB_CA: /mdm-data/scep/ca.pem
       NANOHUB_STORAGE: mysql
       NANOHUB_STORAGE_DSN: nanohub:${MYSQL_PASSWORD}@tcp(mdm-mysql:3306)/nanohub?parseTime=true
-      NANOHUB_WEBHOOK_URL: http://mdm:8081/webhook
+      NANOHUB_WEBHOOK_URL: http://admin:${MDM_ADMIN_TOKEN}@mdm:8081/webhook
     volumes:
       - mdm-data:/mdm-data:ro
 volumes:
@@ -77,6 +78,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `NANOHUB_URL` | `http://mdm-nanohub:9004` | the API of NanoHUB |
 | `NANOHUB_API_KEY` | | the API key of NanoHUB; required |
 | `MDM_ENROLL_TOKEN` | | the secret of 16+ characters of `GET /mdm/enroll` (`Authorization: Bearer`); required |
+| `MDM_ADMIN_TOKEN` | | the secret of 32+ characters of every request of the admin listener (`Authorization: Bearer <token>`, or the password of Basic with any user); `401` with a Basic challenge without it; required |
 | `MDM_PROFILE_ID` | `com.zebrunner.mcloud.mdm` | the PayloadIdentifier of the enrollment profile |
 | `MDM_ORG_NAME` | `Zebrunner MCloud` | the organization of the profiles and of the SCEP CA |
 | `MDM_TLS_CA_FILE` | | the PEM CA of a self-signed MDM server: the enrollment profile installs it and pins the MDM connection to it |
@@ -223,7 +225,7 @@ Everything goes through the domain and the proxy of the farm: no DNS name, certi
 MCloud (zebrunner/mcloud):
 
 - the compose profile `mdm` (as `adb-relay`): `mdm`, `mdm-nanohub`, `mdm-mysql`, `hmdm`, `hmdm-postgres`, `hmdm-init`, switched on by `MDM_ENABLED=true` of `.env`; the image tags in `TAG_*`;
-- `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`; `MDM_PUBLIC_URL` is `STF_URL`;
+- `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `MDM_ADMIN_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`; `MDM_PUBLIC_URL` is `STF_URL`;
 - stf-proxy: the locations of `proxy.conf` (the addresses of the site and `MDM_ENROLL_TOKEN` rendered by the setup), its stream server on 31443 with the certificate of stf-proxy (`configuration/stf-proxy/ssl`), port 31443 published; a farm whose TLS ends before stf-proxy (a load balancer) terminates 31443 there too;
 - the admin UI on `127.0.0.1:${MDM_ADMIN_PORT}` (9101) of the server only, by default: an ssh tunnel (`ssh -L 9101:127.0.0.1:9101 <server>`, then `http://127.0.0.1:9101`); optionally (`MDM_ADMIN_PUBLIC=true`) `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF) with `Host: $http_host` (the UI compares it with the Origin of its POSTs).
 

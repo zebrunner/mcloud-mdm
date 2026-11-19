@@ -1,8 +1,9 @@
-// Package admin serves the admin UI, its API and the webhook of NanoHUB. It is never published by the proxy without
-// the authentication of MCloud: it sends any MDM command to any device.
+// Package admin serves the admin UI, its API and the webhook of NanoHUB. Every request needs MDM_ADMIN_TOKEN, and it is
+// never published by the proxy without the authentication of MCloud: it sends any MDM command to any device.
 package admin
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -44,7 +45,7 @@ type Server struct {
 	jobs jobs
 }
 
-// Handler routes the UI, the API and the webhook.
+// Handler routes the UI, the API and the webhook, for the requests with the admin token only.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.static("web/index.html", "text/html; charset=utf-8"))
@@ -73,7 +74,38 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sets/save", s.browser(s.setSave))
 	mux.HandleFunc("POST /api/sets/delete", s.browser(s.setDelete))
 	mux.HandleFunc("POST /webhook", s.webhook)
-	return mux
+	return s.authorized(mux)
+}
+
+// authorized lets in the requests with MDM_ADMIN_TOKEN: Authorization: Bearer <token>, or Basic with the token as the
+// password (a browser through an ssh tunnel asks for it, NanoHUB sends it from the userinfo of its webhook URL); 401
+// with a Basic challenge otherwise. Without a token (not a valid configuration) every request is refused.
+func (s *Server) authorized(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Config != nil && s.Config.AdminToken != "" && sameToken(adminCredential(r), s.Config.AdminToken) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.Log.Warn("refused a request of the admin listener: no valid MDM_ADMIN_TOKEN", "remote", r.RemoteAddr,
+			"method", r.Method, "path", r.URL.Path)
+		w.Header().Set("WWW-Authenticate", `Basic realm="MCloud MDM", charset="UTF-8"`)
+		fail(w, http.StatusUnauthorized, errors.New("the admin token of mcloud-mdm is required (MDM_ADMIN_TOKEN)"))
+	})
+}
+
+// adminCredential is the token of Authorization: Bearer, or the password of Basic
+func adminCredential(r *http.Request) string {
+	if _, password, ok := r.BasicAuth(); ok {
+		return password
+	}
+	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		return strings.TrimSpace(token)
+	}
+	return ""
+}
+
+func sameToken(given, want string) bool {
+	return given != "" && subtle.ConstantTimeCompare([]byte(given), []byte(want)) == 1
 }
 
 func (s *Server) static(name, contentType string) http.HandlerFunc {

@@ -23,9 +23,12 @@ type Config struct {
 	DeviceListen string
 	// AdminListen serves the UI, its API and the webhook of NanoHUB (never published outside of the host)
 	AdminListen string
-	DataDir     string
-	NanoHUBURL  string
-	NanoHUBKey  string
+	// AdminToken is required by every request of the admin listener: Authorization: Bearer <token> or the password of
+	// Basic (any user), so a container of the same docker network cannot send MDM commands
+	AdminToken string
+	DataDir    string
+	NanoHUBURL string
+	NanoHUBKey string
 	// EnrollToken authorizes GET /mdm/enroll (the agents of the device hosts)
 	EnrollToken string
 	// ProfileID is the PayloadIdentifier of the enrollment profile
@@ -72,6 +75,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		SCEPURL:      get("MDM_SCEP_URL", ""),
 		DeviceListen: get("MDM_DEVICE_LISTEN", ":8080"),
 		AdminListen:  get("MDM_ADMIN_LISTEN", ":8081"),
+		AdminToken:   get("MDM_ADMIN_TOKEN", ""),
 		DataDir:      get("MDM_DATA_DIR", "/data"),
 		NanoHUBURL:   strings.TrimRight(get("NANOHUB_URL", "http://mdm-nanohub:9004"), "/"),
 		NanoHUBKey:   get("NANOHUB_API_KEY", ""),
@@ -108,6 +112,10 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	if c.NanoHUBKey == "" {
 		errs = append(errs, errors.New("NANOHUB_API_KEY is empty: the API key of NanoHUB"))
+	}
+	if len(c.AdminToken) < 32 {
+		errs = append(errs, errors.New("MDM_ADMIN_TOKEN: a secret of 32+ characters every request of the admin listener needs "+
+			"(Authorization: Bearer <token>, or the password of Basic)"))
 	}
 	if len(c.EnrollToken) < 16 {
 		errs = append(errs, errors.New("MDM_ENROLL_TOKEN: a secret of 16+ characters the agents enroll the devices with"))
