@@ -32,6 +32,12 @@ import (
 // version is set by the build of the image (-ldflags "-X main.version=<tag>")
 var version = "dev"
 
+// banner is the first log line of the service (CONVENTIONS.md#terminal-output): the heavy line, the service, its
+// version and the facts, separated by middle dots
+func banner(service, ver string, facts ...string) string {
+	return strings.Join(append([]string{"\u2501\u2501 " + service + " " + ver}, facts...), " \u00b7 ")
+}
+
 func main() {
 	healthcheck := flag.Bool("healthcheck", false, "check the health endpoint of the device listener and exit (the HEALTHCHECK of the image)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -46,6 +52,7 @@ func main() {
 	}
 	if err != nil {
 		log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		log.Info(banner("mcloud-mdm", version))
 		for _, line := range strings.Split(err.Error(), "\n") {
 			log.Error("invalid configuration", "problem", line)
 		}
@@ -53,6 +60,7 @@ func main() {
 		os.Exit(0)
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	log.Info(banner("mcloud-mdm", version, "device listener "+cfg.DeviceListen))
 	if err := run(cfg, log); err != nil {
 		log.Error("mcloud-mdm stopped", "err", err)
 		os.Exit(1)

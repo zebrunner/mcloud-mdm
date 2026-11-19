@@ -88,6 +88,8 @@ else
   finish
 fi
 logs="$(docker logs "${PREFIX}-run" 2>&1)"
+check_contains "the first log line is the banner with the version of the build" \
+  $'msg="\xe2\x94\x81\xe2\x94\x81 mcloud-mdm dev \xc2\xb7 device listener ' "$(head -1 <<< "$logs")"
 check_contains "the SCEP CA is created" "SCEP CA created" "$logs"
 check_not_contains "no error is logged" "level=ERROR" "$logs"
 check "the key of the SCEP CA is private" "600" "$(in_container stat -c %a /data/scep/ca.key)"
