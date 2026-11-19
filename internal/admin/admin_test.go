@@ -22,6 +22,8 @@ import (
 
 const udid = "00008020-0005308201DA002E"
 
+const adminToken = "0123456789abcdef0123456789abcdef"
+
 // fakeHub records the requests to NanoHUB and acknowledges every enqueued command through the webhook of admin
 type fakeHub struct {
 	mu       sync.Mutex
@@ -103,8 +105,11 @@ func setupServer(t *testing.T) (*fakeHub, *httptest.Server, *state.Store, *Serve
 		NanoHUB: nanohub.New(hubSrv.URL, "k"), State: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AnswerTimeout: 5 * time.Second, RefreshDelay: 10 * time.Millisecond,
 	}
+	s.Config.AdminToken = adminToken
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
+	// the requests of the tests carry the admin token as the password of Basic, as the webhook of NanoHUB
+	srv.URL = strings.Replace(srv.URL, "http://", "http://admin:"+adminToken+"@", 1)
 	hub.admin = srv.URL
 	return hub, srv, st, s
 }
@@ -282,5 +287,66 @@ func TestStatic(t *testing.T) {
 		if c["hint"] == "" || c["type"] == "" || c["group"] == "" {
 			t.Errorf("catalog entry without a hint: %v", c)
 		}
+	}
+}
+
+func TestAdminToken(t *testing.T) {
+	_, srv, _ := setup(t)
+	plain := strings.Replace(srv.URL, "admin:"+adminToken+"@", "", 1)
+	do := func(method, path string, auth ...string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(method, plain+path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		if len(auth) == 2 {
+			req.SetBasicAuth(auth[0], auth[1])
+		} else if len(auth) == 1 {
+			req.Header.Set("Authorization", auth[0])
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	for _, path := range []string{"/", "/api/state", "/api/farm", "/api/jobs", "/api/catalog"} {
+		resp := do(http.MethodGet, path)
+		if resp.StatusCode != http.StatusUnauthorized || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Basic ") {
+			t.Errorf("GET %s without the token: %d %q", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+		}
+	}
+	for _, path := range []string{"/webhook", "/api/command", "/api/raw", "/api/pushcert", "/api/jobs"} {
+		if resp := do(http.MethodPost, path); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("POST %s without the token: %d", path, resp.StatusCode)
+		}
+	}
+	for name, auth := range map[string][]string{
+		"wrong Basic":  {"admin", adminToken + "x"},
+		"wrong Bearer": {"Bearer " + adminToken[:31]},
+		"the user":     {adminToken, ""},
+		"no scheme":    {adminToken},
+	} {
+		if resp := do(http.MethodGet, "/api/state", auth...); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s: %d", name, resp.StatusCode)
+		}
+	}
+	if resp := do(http.MethodGet, "/api/state", "Bearer "+adminToken); resp.StatusCode != http.StatusOK {
+		t.Errorf("Bearer: %d", resp.StatusCode)
+	}
+	if resp := do(http.MethodGet, "/api/state", "anyone", adminToken); resp.StatusCode != http.StatusOK {
+		t.Errorf("Basic: %d", resp.StatusCode)
+	}
+}
+
+func TestAdminTokenMissing(t *testing.T) {
+	_, srv, _, s := setupServer(t)
+	s.Config.AdminToken = ""
+	resp, err := http.Get(srv.URL + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("without a configured token: %d", resp.StatusCode)
 	}
 }

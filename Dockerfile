@@ -13,8 +13,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
-# the defaults of the configuration, all of them are documented in README.md; MDM_PUBLIC_URL, NANOHUB_API_KEY and
-# MDM_ENROLL_TOKEN have none
+# the defaults of the configuration, all of them are documented in README.md; MDM_PUBLIC_URL, NANOHUB_API_KEY,
+# MDM_ENROLL_TOKEN and MDM_ADMIN_TOKEN have none
 # the secrets are listed with an empty default only, as every variable of the configuration: they are set at run time
 # hadolint ignore=DL3064
 ENV MDM_PUBLIC_URL="" \
@@ -25,6 +25,7 @@ ENV MDM_PUBLIC_URL="" \
     NANOHUB_URL="http://mdm-nanohub:9004" \
     NANOHUB_API_KEY="" \
     MDM_ENROLL_TOKEN="" \
+    MDM_ADMIN_TOKEN="" \
     MDM_PROFILE_ID="com.zebrunner.mcloud.mdm" \
     MDM_ORG_NAME="Zebrunner MCloud" \
     MDM_TLS_CA_FILE="" \

@@ -8,6 +8,7 @@ cd "$REPO" || exit 1
 IMAGE="${IMAGE:-mcloud-mdm:test}"
 PREFIX="mcloud-mdm-test-$$"
 TOKEN="0123456789abcdef0123"
+ADMIN_TOKEN="0123456789abcdef0123456789abcdef"
 
 require_cmd docker
 docker info > /dev/null 2>&1 || skip "requires a running docker daemon"
@@ -28,7 +29,7 @@ in_container() {
 # start: starts the container of the startup checks with the data volume
 start() {
   docker run -d --name "${PREFIX}-run" -v "${PREFIX}-data:/data" -e MDM_PUBLIC_URL=https://mcloud.example.com \
-    -e NANOHUB_API_KEY=key -e MDM_ENROLL_TOKEN="$TOKEN" "$IMAGE" > /dev/null 2>&1
+    -e NANOHUB_API_KEY=key -e MDM_ENROLL_TOKEN="$TOKEN" -e MDM_ADMIN_TOKEN="$ADMIN_TOKEN" "$IMAGE" > /dev/null 2>&1
 }
 
 # wait_healthy <seconds>: waits for the healthcheck of the started container
@@ -76,7 +77,9 @@ check "no configuration exits with 0" "0" "$?"
 check_contains "MDM_PUBLIC_URL is required" "MDM_PUBLIC_URL" "$out"
 check_contains "NANOHUB_API_KEY is required" "NANOHUB_API_KEY is empty" "$out"
 check_contains "MDM_ENROLL_TOKEN is required" "MDM_ENROLL_TOKEN" "$out"
-out="$(docker run --rm -e MDM_PUBLIC_URL=https://x -e NANOHUB_API_KEY=k -e MDM_ENROLL_TOKEN="$TOKEN" -e LOGGER_LEVEL=LOUD "$IMAGE" 2>&1)"
+check_contains "MDM_ADMIN_TOKEN is required" "MDM_ADMIN_TOKEN" "$out"
+out="$(docker run --rm -e MDM_PUBLIC_URL=https://x -e NANOHUB_API_KEY=k -e MDM_ENROLL_TOKEN="$TOKEN" -e MDM_ADMIN_TOKEN="$ADMIN_TOKEN" \
+  -e LOGGER_LEVEL=LOUD "$IMAGE" 2>&1)"
 check "an invalid LOGGER_LEVEL exits with 0" "0" "$?"
 check_contains "the invalid LOGGER_LEVEL is logged" "LOGGER_LEVEL" "$out"
 
@@ -104,9 +107,14 @@ check "the enrollment profile needs the push certificate" "503" "$(status http:/
 check "the admin API is not on the device listener" "404" "$(status http://127.0.0.1:8080/api/state)"
 
 section "admin listener"
-check_contains "the UI" "<title>MCloud MDM</title>" "$(in_container wget -qO- http://127.0.0.1:8081/)"
-check_contains "the catalog of the commands" '"DeviceInformation"' "$(in_container wget -qO- http://127.0.0.1:8081/api/catalog)"
-check_contains "the state" '"enroll_url":"https://mcloud.example.com/mdm/enroll"' "$(in_container wget -qO- http://127.0.0.1:8081/api/state)"
+admin="Authorization: Bearer ${ADMIN_TOKEN}"
+check "the admin listener needs the admin token" "401" "$(status http://127.0.0.1:8081/api/state)"
+check "a wrong admin token is refused" "401" "$(status http://127.0.0.1:8081/api/state "Authorization: Bearer wrong")"
+check_contains "the UI" "<title>MCloud MDM</title>" "$(in_container wget -qO- --header "$admin" http://127.0.0.1:8081/)"
+check_contains "the catalog of the commands" '"DeviceInformation"' \
+  "$(in_container wget -qO- --header "$admin" http://127.0.0.1:8081/api/catalog)"
+check_contains "the state" '"enroll_url":"https://mcloud.example.com/mdm/enroll"' \
+  "$(in_container wget -qO- --header "$admin" http://127.0.0.1:8081/api/state)"
 
 section "restart"
 docker rm --force "${PREFIX}-run" > /dev/null 2>&1
