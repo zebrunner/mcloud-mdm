@@ -350,3 +350,29 @@ func TestAdminTokenMissing(t *testing.T) {
 		t.Errorf("without a configured token: %d", resp.StatusCode)
 	}
 }
+
+// NanoMDM logs every webhook answer but 200 as a failure (service/webhook: "unexpected HTTP status")
+func TestWebhookAnswers200(t *testing.T) {
+	_, srv, _ := setup(t)
+	post := func(body string) int {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/webhook", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	raw, _ := plist.Marshal(map[string]any{"UDID": udid, "Status": "Idle"}, plist.XMLFormat)
+	event := `{"topic":"mdm.Connect","acknowledge_event":{"udid":"` + udid + `","status":"Idle","raw_payload":"` +
+		base64.StdEncoding.EncodeToString(raw) + `"}}`
+	if code := post(event); code != http.StatusOK {
+		t.Errorf("an event: %d", code)
+	}
+	if code := post(`{"topic":"mdm.Other"}`); code != http.StatusOK {
+		t.Errorf("an event without a body: %d", code)
+	}
+	if code := post(`not json`); code != http.StatusBadRequest {
+		t.Errorf("an invalid event: %d", code)
+	}
+}

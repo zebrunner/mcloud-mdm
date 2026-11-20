@@ -83,7 +83,7 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
 		body = e.Checkin
 	}
 	if body == nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	report := map[string]any{}
@@ -129,7 +129,8 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "state failed", http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// 200, not 204: the webhook of NanoMDM takes any other status for a failure and logs it
+	w.WriteHeader(http.StatusOK)
 }
 
 // afterEnrollment: the device does not synchronize DDM by itself after an enrollment (checked), so the declarations
