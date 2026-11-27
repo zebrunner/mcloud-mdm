@@ -31,12 +31,17 @@ func newServer(t *testing.T) (*Server, *httptest.Server) {
 // request is a PKCSReq of a fresh key, the way iOS makes it: a self-signed signer, the CSR with the challenge
 func request(t *testing.T, ca *x509.Certificate, challenge string, signer *x509.Certificate, signerKey *rsa.PrivateKey, kind scep.MessageType) ([]byte, *rsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
+	return requestAs(t, "device-1", ca, challenge, signer, signerKey, kind)
+}
+
+func requestAs(t *testing.T, cn string, ca *x509.Certificate, challenge string, signer *x509.Certificate, signerKey *rsa.PrivateKey, kind scep.MessageType) ([]byte, *rsa.PrivateKey, *x509.Certificate) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 	der, err := x509util.CreateCertificateRequest(rand.Reader, &x509util.CertificateRequest{
-		CertificateRequest: x509.CertificateRequest{Subject: pkix.Name{CommonName: "device-1"}},
+		CertificateRequest: x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}},
 		ChallengePassword:  challenge,
 	}, key)
 	if err != nil {
@@ -47,7 +52,7 @@ func request(t *testing.T, ca *x509.Certificate, challenge string, signer *x509.
 		t.Fatal(err)
 	}
 	if signer == nil {
-		tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "device-1"},
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: cn},
 			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
 		selfDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 		if err != nil {
@@ -141,6 +146,39 @@ func TestOneTimeChallenge(t *testing.T) {
 	body, _, _ = request(t, s.CA.Cert, "", nil, nil, scep.RenewalReq)
 	if reply := post(t, srv.URL, body); reply.PKIStatus != scep.FAILURE {
 		t.Errorf("a self-signed renewal signed: %v", reply.PKIStatus)
+	}
+}
+
+func TestBoundChallenge(t *testing.T) {
+	s, srv := newServer(t)
+	defer srv.Close()
+	const udid = "00008020-0005308201DA002E"
+	// the identity of another device with the challenge of a profile for udid: refused, and the challenge is used
+	challenge, err := s.Challenges.NewFor(udid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cn := range []string{"device-1", SubjectPrefix("00008020-0005308201DA0000") + "1a2b3c4d", "mcloud-mdm-" + udid} {
+		body, _, _ := requestAs(t, cn, s.CA.Cert, challenge, nil, nil, scep.PKCSReq)
+		if reply := post(t, srv.URL, body); reply.PKIStatus != scep.FAILURE || reply.FailInfo != scep.BadRequest {
+			t.Errorf("%s: %v %v", cn, reply.PKIStatus, reply.FailInfo)
+		}
+		challenge, _ = s.Challenges.NewFor(udid)
+	}
+	if s.Challenges.Pending() != 1 {
+		t.Errorf("pending: %d", s.Challenges.Pending())
+	}
+	// the identity of the device of the profile: signed
+	body, key, signer := requestAs(t, SubjectPrefix(udid)+"1a2b3c4d", s.CA.Cert, challenge, nil, nil, scep.PKCSReq)
+	reply := post(t, srv.URL, body)
+	if reply.PKIStatus != scep.SUCCESS {
+		t.Fatalf("status %v fail %v", reply.PKIStatus, reply.FailInfo)
+	}
+	if err := reply.DecryptPKIEnvelope(signer, key); err != nil {
+		t.Fatal(err)
+	}
+	if cn := reply.Certificate.Subject.CommonName; cn != SubjectPrefix(udid)+"1a2b3c4d" {
+		t.Errorf("certificate: %q", cn)
 	}
 }
 

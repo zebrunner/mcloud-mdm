@@ -113,6 +113,10 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second}
 	if cfg.STFURL != "" {
 		adm.STF = stf.New(cfg.STFURL, cfg.STFToken)
+		dev.Nodes = adm.STF
+	}
+	if cfg.EnforceNodeBinding {
+		log.Info("MDM_ENFORCE_NODE_BINDING: the nodes act on the MDM of their own devices only (STF, " + device.NodeHeader + ")")
 	}
 	dev.Commands = adm
 	if cfg.HeadwindURL != "" {

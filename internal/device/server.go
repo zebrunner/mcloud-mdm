@@ -25,6 +25,13 @@ import (
 // udidPattern: the UDIDs of the devices, the old 40 hex ones too
 var udidPattern = regexp.MustCompile(`^[0-9A-Fa-f-]{20,64}$`)
 
+// NodeHeader names the node of the token of a node call: the proxy of MCloud sets it from the answer of STF to its
+// auth_request (the header of the client overwritten)
+const NodeHeader = "X-MCloud-Node"
+
+// nodeLabel: the labels of the nodes of STF
+var nodeLabel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
 // Server is the handler of the device listener.
 type Server struct {
 	Config *config.Config
@@ -35,7 +42,14 @@ type Server struct {
 	Android *android.Manager
 	// Commands sends the MDM commands of the nodes (the release of an iOS device): the admin server
 	Commands Commander
-	tlsCA    []byte
+	// Nodes knows the node of each device (STF): MDM_ENFORCE_NODE_BINDING
+	Nodes NodeLookup
+	tlsCA []byte
+}
+
+// NodeLookup returns the node a device is bound to (found is false for an unknown device).
+type NodeLookup interface {
+	DeviceNode(serial string) (node string, found bool, err error)
 }
 
 // Commander enqueues an MDM command for a device (NanoHUB pushes it) and returns its uuid; Enrolled applies the set of
@@ -89,19 +103,31 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid udid", http.StatusBadRequest)
 		return
 	}
+	if s.Config.EnforceNodeBinding && udid == "" {
+		http.Error(w, "the udid is required", http.StatusBadRequest)
+		return
+	}
+	if !s.boundToNode(w, r, udid) {
+		return
+	}
 	topic := s.State.Topic()
 	if topic == "" {
 		http.Error(w, "no APNs push certificate: upload it in the admin UI first", http.StatusServiceUnavailable)
 		return
 	}
-	challenge, err := s.SCEP.Challenges.New()
+	// the binding of the nodes: the challenge signs the identity of this device only
+	bound := ""
+	if s.Config.EnforceNodeBinding {
+		bound = udid
+	}
+	challenge, err := s.SCEP.Challenges.NewFor(bound)
 	if err != nil {
 		http.Error(w, "challenge failed", http.StatusInternalServerError)
 		return
 	}
 	subject := "mcloud-mdm-" + nanohub.NewUUID()[:8]
 	if udid != "" {
-		subject = "mcloud-mdm-" + udid + "-" + nanohub.NewUUID()[:8]
+		subject = scep.SubjectPrefix(udid) + nanohub.NewUUID()[:8]
 	}
 	data, err := profile.Enrollment{
 		ID: s.Config.ProfileID, OrgName: s.Config.OrgName, ServerURL: s.Config.PublicURL + "/mdm",
@@ -134,6 +160,48 @@ func (s *Server) authorized(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// boundToNode checks with MDM_ENFORCE_NODE_BINDING that STF binds the device to the node of the call (NodeHeader);
+// it answers the refusals (fail closed: no header, no answer of STF) and logs their reasons. Without the setting
+// every node acts on every device, as before.
+func (s *Server) boundToNode(w http.ResponseWriter, r *http.Request, device string) bool {
+	if !s.Config.EnforceNodeBinding {
+		return true
+	}
+	node := r.Header.Get(NodeHeader)
+	refuse := func(reason string, args ...any) bool {
+		s.Log.Warn("node call refused: "+reason, append([]any{"node", node, "device", device, "path", r.URL.Path,
+			"remote", r.RemoteAddr}, args...)...)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	switch {
+	case node == "":
+		s.Log.Error("node call refused: the proxy names no node ("+NodeHeader+"), MDM_ENFORCE_NODE_BINDING=true needs "+
+			"an stf and an mcloud that pass it: update them or set MDM_ENFORCE_NODE_BINDING=false", "device", device,
+			"path", r.URL.Path, "remote", r.RemoteAddr)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	case !nodeLabel.MatchString(node):
+		return refuse("not a node label")
+	case s.Nodes == nil:
+		return refuse("no STF (MDM_STF_URL)")
+	}
+	owner, found, err := s.Nodes.DeviceNode(device)
+	if err != nil {
+		s.Log.Error("node call refused: the node of the device not read from STF", "node", node, "device", device,
+			"path", r.URL.Path, "err", err)
+		http.Error(w, "the device is not checked, try again later", http.StatusServiceUnavailable)
+		return false
+	}
+	if !found {
+		return refuse("not a device of STF")
+	}
+	if owner != node {
+		return refuse("the device is bound to another node", "bound_to", owner)
+	}
+	return true
+}
+
 // androidEnroll prepares Headwind MDM for the device and returns the setup of its agent over adb (README.md#android)
 func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
@@ -146,6 +214,9 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 	serial := r.URL.Query().Get("serial")
 	if !android.ValidSerial(serial) {
 		http.Error(w, "invalid serial", http.StatusBadRequest)
+		return
+	}
+	if !s.boundToNode(w, r, serial) {
 		return
 	}
 	agentURL := ""
@@ -174,7 +245,7 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // androidRelease returns the adb shell command that releases a device without the server (android/release.sh): the
-// secret is its token, the enrollment token protects it
+// secret is its token, the enrollment token protects it; with MDM_ENFORCE_NODE_BINDING only for a serial of the node
 func (s *Server) androidRelease(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
 		return
@@ -183,7 +254,15 @@ func (s *Server) androidRelease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no Android: HMDM_URL is not set", http.StatusNotFound)
 		return
 	}
-	s.Log.Info("android release command issued", "serial", r.URL.Query().Get("serial"), "remote", r.RemoteAddr)
+	serial := r.URL.Query().Get("serial")
+	if s.Config.EnforceNodeBinding && !android.ValidSerial(serial) {
+		http.Error(w, "invalid serial", http.StatusBadRequest)
+		return
+	}
+	if !s.boundToNode(w, r, serial) {
+		return
+	}
+	s.Log.Info("android release command issued", "serial", serial, "remote", r.RemoteAddr)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(s.Android.ReleaseCommand() + "\n"))
@@ -243,6 +322,9 @@ func (s *Server) iosStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid udid", http.StatusBadRequest)
 		return
 	}
+	if !s.boundToNode(w, r, udid) {
+		return
+	}
 	d, known := s.State.Device(udid)
 	fields := [][2]string{{"udid", udid}, {"known", yesNo(known)}, {"enrolled", yesNo(s.State.Enrolled(udid))}}
 	if known {
@@ -262,6 +344,9 @@ func (s *Server) iosRelease(w http.ResponseWriter, r *http.Request) {
 	udid := r.URL.Query().Get("udid")
 	if !udidPattern.MatchString(udid) {
 		http.Error(w, "invalid udid", http.StatusBadRequest)
+		return
+	}
+	if !s.boundToNode(w, r, udid) {
 		return
 	}
 	if s.Commands == nil || !s.State.Enrolled(udid) {
@@ -290,6 +375,9 @@ func (s *Server) androidStatus(w http.ResponseWriter, r *http.Request) {
 	serial := r.URL.Query().Get("serial")
 	if !android.ValidSerial(serial) {
 		http.Error(w, "invalid serial", http.StatusBadRequest)
+		return
+	}
+	if !s.boundToNode(w, r, serial) {
 		return
 	}
 	d, err := s.Android.Device(serial)

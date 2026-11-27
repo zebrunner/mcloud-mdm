@@ -95,6 +95,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `MDM_ANDROID_AGENT_APK` | `/android/mcloud-mdm-agent.apk` | the agent (`make agent`) served at `/android/agent.apk` |
 | `MDM_STF_URL` | | the API of STF (MCloud, `http://stf-api:3000`): the names, nodes and locations of the devices (the groups of the admin UI), whether a user has a device (the jobs on free devices only); empty: none of them |
 | `MDM_STF_TOKEN` | | an access token of STF (Settings, Keys) for `MDM_STF_URL`, read only |
+| `MDM_ENFORCE_NODE_BINDING` | `false` | `true`: a node acts on the MDM of its own devices only ([Node binding](#node-binding)); needs `MDM_STF_URL` and `MDM_STF_TOKEN` |
 
 ## Enrollment
 
@@ -239,13 +240,34 @@ The API of the nodes (the device listener, `Authorization: Bearer <MDM_ENROLL_TO
 | `GET /android/agent.apk` | the agent |
 | `GET /android/enroll?serial=<serial>[&name=<name>]` | the setup of the agent (`format=shell`: its `adb shell` command) |
 | `GET /android/status?serial=<serial>` | `known`, `device_owner`, `last_sync_at`, `agent_version`, `model`, `os_version`, `managed`, `presets`: Headwind MDM, the device is not touched |
-| `GET /android/release` | the `adb shell` command of the release without the server |
+| `GET /android/release[?serial=<serial>]` | the `adb shell` command of the release without the server (the serial is required with `MDM_ENFORCE_NODE_BINDING`) |
 
 mcloud-agent (zebrunner/mcloud-agent): `./zebrunner.sh mdm <status|enroll|release|supervise> <devices>` with the `MCLOUD_URL` and the `MCLOUD_NODE_TOKEN` of `./zebrunner.sh join` (no new setting): stf-proxy checks the node token (`GET /api/v1/nodes/self` of stf-api) and calls mcloud-mdm with `MDM_ENROLL_TOKEN`. `status` asks the server only. `enroll` and `release` take the lock of the device, stop its containers (if it has any: a new device has none yet), run a one-shot container of the image of its connector (`docker run --rm --entrypoint ...` with the USB device and the volumes of the connector: `mcloud-key-volume` of adb, `<device>-lockdown` of the pairing), then start its containers again:
 
 - Android (adb): `GET /android/agent.apk` into the connector, `GET /android/enroll?serial=<udid>&name=<name>&format=shell` (the `adb shell` command of the setup), `adb install -r`, `dpm set-device-owner com.hmdm.launcher/.AdminReceiver`, the setup, `am start`; the release: `GET /android/release` (its `adb shell` command). `android/enroll.sh` and `android/release.sh` are the reference.
 - iOS (go-ios, `/var/lib/lockdown` of the connector): `GET /mdm/enroll?udid=<udid>&name=<name>` (a profile with a one-time challenge), `ios profile add --p12file=<supervision identity>`; `ios pair --p12file` after a lost pairing. `supervise`: `ios erase`, `ios activate`, `ios prepare` with the certificate of the identity and every skip key, `ios devmode enable`, the Wi-Fi profile of the farm, then the enrollment; WebDriverAgent of the connector continues the Setup Assistant of iOS 26.
 - later: the udev and systemd hook of a connected device enrolls a device that is not enrolled.
+
+### Node binding
+
+Every node has the same `MDM_ENROLL_TOKEN` behind stf-proxy: without more, a node could ask the MDM about any device of
+the farm, release it, enroll another udid or take the release command of the Android agents (with `HMDM_SHARED_SECRET`).
+With `MDM_ENFORCE_NODE_BINDING=true` (off by default: every node acts on every device, as before):
+
+- stf-proxy passes the label of the node of the token in `X-MCloud-Node` (stf-api answers it to the `auth_request`,
+  `proxy.conf`; the header of the client is overwritten);
+- every node call names its device (`udid` or `serial`, also `GET /android/release` and `GET /mdm/enroll` then) and
+  mcloud-mdm asks STF (`GET /api/v1/devices/<serial>`, `MDM_STF_TOKEN`: an admin who sees every device) for its
+  `node`: another node, a device STF does not know or no node: `403 forbidden`, logged with the node and the device;
+  STF does not answer: `503`, nothing done;
+- no `X-MCloud-Node` (an stf or an mcloud without it): every node call is refused (`403`), logged as an error to update
+  them; fail closed;
+- the SCEP challenge of an enrollment profile is bound to its udid: it signs only a CSR whose subject is the one of that
+  device (`mcloud-mdm-<udid>-...`).
+
+Not covered (follow-ups): `HMDM_SHARED_SECRET` is one for the farm and stays in the setup and the release commands
+of the agents (their protocol needs it), now only for the node of the device; NanoHUB does not give the identity of a
+device to the webhook, so the udid of an `Authenticate` is not compared with the subject of its identity.
 
 ## Keys and certificates
 

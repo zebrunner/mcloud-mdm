@@ -57,6 +57,9 @@ type Config struct {
 	// and whether a user has one; empty: no groups and no jobs waiting for free devices
 	STFURL   string
 	STFToken string
+	// EnforceNodeBinding: the node calls (/mdm/enroll, /android/release, ...) act only on the devices STF binds to the
+	// node the proxy names (X-MCloud-Node); it needs STFURL
+	EnforceNodeBinding bool
 }
 
 var headwindPath = regexp.MustCompile(`^(/[A-Za-z0-9_-]+)?$`)
@@ -93,6 +96,16 @@ func Load(getenv func(string) string) (*Config, error) {
 		AgentAPK:          get("MDM_ANDROID_AGENT_APK", "/android/mcloud-mdm-agent.apk"),
 		STFURL:            strings.TrimRight(get("MDM_STF_URL", ""), "/"),
 		STFToken:          get("MDM_STF_TOKEN", ""),
+	}
+	switch v := get("MDM_ENFORCE_NODE_BINDING", "false"); v {
+	case "true":
+		c.EnforceNodeBinding = true
+		if c.STFURL == "" {
+			errs = append(errs, errors.New("MDM_ENFORCE_NODE_BINDING=true needs MDM_STF_URL and MDM_STF_TOKEN: STF knows the node of each device"))
+		}
+	case "false":
+	default:
+		errs = append(errs, fmt.Errorf("MDM_ENFORCE_NODE_BINDING %q: true or false", v))
 	}
 	if c.STFURL != "" {
 		if u, err := url.Parse(c.STFURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {

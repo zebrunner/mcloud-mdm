@@ -95,8 +95,13 @@ func (s *Server) answer(msg *scep.PKIMessage) (*scep.PKIMessage, error) {
 	}
 	switch msg.MessageType {
 	case scep.PKCSReq:
-		if !s.Challenges.Consume(msg.ChallengePassword) {
+		udid, ok := s.Challenges.Take(msg.ChallengePassword)
+		if !ok {
 			return fail("the challenge is unknown, used or expired", scep.BadRequest)
+		}
+		// a challenge of a profile for one device (the binding of the nodes) signs the identity of that device only
+		if udid != "" && !strings.HasPrefix(msg.CSR.Subject.CommonName, SubjectPrefix(udid)) {
+			return fail("the CSR is not of the device of the challenge "+udid, scep.BadRequest)
 		}
 	case scep.RenewalReq:
 		if !s.CA.Issued(msg.SignerCert) {

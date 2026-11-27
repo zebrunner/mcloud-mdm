@@ -106,3 +106,24 @@ func TestHeadwind(t *testing.T) {
 		t.Error("a secret with a colon breaks the adb setup and is accepted")
 	}
 }
+
+func TestEnforceNodeBinding(t *testing.T) {
+	c, err := Load(env(valid()))
+	if err != nil || c.EnforceNodeBinding {
+		t.Fatalf("off by default: %v %v", c.EnforceNodeBinding, err)
+	}
+	values := valid()
+	values["MDM_ENFORCE_NODE_BINDING"] = "true"
+	if _, err := Load(env(values)); err == nil || !strings.Contains(err.Error(), "MDM_STF_URL") {
+		t.Errorf("no STF: %v", err)
+	}
+	values["MDM_STF_URL"] = "http://stf-api:3000"
+	values["MDM_STF_TOKEN"] = "tok"
+	if c, err := Load(env(values)); err != nil || !c.EnforceNodeBinding {
+		t.Errorf("on: %v %v", c, err)
+	}
+	values["MDM_ENFORCE_NODE_BINDING"] = "yes"
+	if _, err := Load(env(values)); err == nil || !strings.Contains(err.Error(), "MDM_ENFORCE_NODE_BINDING") {
+		t.Errorf("invalid: %v", err)
+	}
+}
