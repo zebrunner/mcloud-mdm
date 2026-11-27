@@ -131,7 +131,8 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	dev.Commands = adm
 	if cfg.HeadwindURL != "" {
 		mgr := &android.Manager{HW: headwind.New(cfg.HeadwindURL, cfg.HeadwindLogin, cfg.HeadwindPassword),
-			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret, MQTTPort: cfg.HeadwindMQTTPort}
+			PublicURL: cfg.HeadwindPublicURL, Secret: cfg.HeadwindSecret, MQTTPort: cfg.HeadwindMQTTPort,
+			Pins: cfg.HeadwindTLSPins}
 		if cfg.HeadwindTLSCAFile != "" {
 			raw, err := os.ReadFile(cfg.HeadwindTLSCAFile)
 			if err != nil {
@@ -145,6 +146,9 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		}
 		if strings.HasPrefix(cfg.HeadwindPublicURL, "http://") {
 			log.Warn("HMDM_PUBLIC_URL is plain http: the API and MQTT of the agents are not encrypted, a lab only")
+		}
+		if !cfg.AndroidLegacySetup {
+			log.Info("MDM_ANDROID_LEGACY_SETUP=false: the nodes get the staged setup of the agents only, the secret in no command line")
 		}
 		dev.Android, adm.Android = mgr, mgr
 		// Headwind MDM may start later: the problem is reported, Android works once it answers

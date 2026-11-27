@@ -220,6 +220,15 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 	if !s.boundToNode(w, r, serial) {
 		return
 	}
+	// staged=1: the node can use the staged form of the agent (the secret on stdin); without it only the argument form
+	staged := r.URL.Query().Get("staged") == "1"
+	if !staged && !s.Config.AndroidLegacySetup {
+		s.Log.Warn("android enrollment refused: a node without the staged setup, MDM_ANDROID_LEGACY_SETUP=false",
+			"serial", serial, "remote", r.RemoteAddr)
+		http.Error(w, "the setup with the secret in its arguments is off (MDM_ANDROID_LEGACY_SETUP=false): update mcloud-agent",
+			http.StatusConflict)
+		return
+	}
 	agentURL := ""
 	if _, err := os.Stat(s.Config.AgentAPK); err == nil {
 		agentURL = s.Config.PublicURL + "/android/agent.apk"
@@ -230,14 +239,29 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	s.Log.Info("android enrollment prepared", "serial", serial, "new", setup.New, "remote", r.RemoteAddr)
+	s.Log.Info("android enrollment prepared", "serial", serial, "new", setup.New, "staged", staged, "remote", r.RemoteAddr)
 	if setup.New && s.Commands != nil {
 		go s.Commands.Enrolled("android", serial)
 	}
+	if !s.Config.AndroidLegacySetup {
+		// no command with the secret in its arguments
+		setup.Configure, setup.Release, setup.ADB = "", "", nil
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Query().Get("format") == "shell" {
-		// the setup command of the agent for adb shell, for the scripts without a JSON parser (android/enroll.sh)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if staged {
+			// staged=<the JSON of the staged form> and command=<the command of the argument form> (if allowed): the
+			// node picks the one of the agent
+			body, err := stagedAnswer(setup.Staged, setup.Configure)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		// the setup command of the agent for adb shell, for the scripts without a JSON parser
 		_, _ = w.Write([]byte(setup.Configure + "\n"))
 		return
 	}
@@ -246,7 +270,8 @@ func (s *Server) androidEnroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // androidRelease returns the adb shell command that releases a device without the server (android/release.sh): the
-// secret is its token, the enrollment token protects it; with MDM_ENFORCE_NODE_BINDING only for a serial of the node
+// secret is its token, the enrollment token protects it; with MDM_ENFORCE_NODE_BINDING only for a serial of the node.
+// staged=1: staged=<the JSON of the staged form> and command=<the command> (if MDM_ANDROID_LEGACY_SETUP allows it)
 func (s *Server) androidRelease(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
 		return
@@ -260,13 +285,29 @@ func (s *Server) androidRelease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid serial", http.StatusBadRequest)
 		return
 	}
+	staged := r.URL.Query().Get("staged") == "1"
+	if !staged && !s.Config.AndroidLegacySetup {
+		s.Log.Warn("android release refused: a node without the staged release, MDM_ANDROID_LEGACY_SETUP=false",
+			"serial", serial, "remote", r.RemoteAddr)
+		http.Error(w, "the release with the secret in its arguments is off (MDM_ANDROID_LEGACY_SETUP=false): update mcloud-agent",
+			http.StatusConflict)
+		return
+	}
 	if !s.boundToNode(w, r, serial) {
 		return
 	}
-	s.Log.Info("android release command issued", "serial", serial, "remote", r.RemoteAddr)
+	s.Log.Info("android release command issued", "serial", serial, "staged", staged, "remote", r.RemoteAddr)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(s.Android.ReleaseCommand() + "\n"))
+	command := ""
+	if s.Config.AndroidLegacySetup {
+		command = s.Android.ReleaseCommand()
+	}
+	if staged {
+		_, _ = w.Write([]byte("staged=" + s.Android.StagedRelease() + "\n" + lineIf("command=", command)))
+		return
+	}
+	_, _ = w.Write([]byte(command + "\n"))
 }
 
 // agentAPK serves the Android agent: it is no secret, its signing key is
@@ -410,4 +451,21 @@ func (s *Server) androidStatus(w http.ResponseWriter, r *http.Request) {
 			[2]string{"managed", yesNo(!d.Unmanaged)}, [2]string{"presets", strings.Join(presets, ",")})
 	}
 	answer(w, r, http.StatusOK, fields)
+}
+
+// lineIf is the line of the key and the value, nothing for an empty value
+func lineIf(key, value string) string {
+	if value == "" {
+		return ""
+	}
+	return key + value + "\n"
+}
+
+// stagedAnswer is the answer of a node that can use the staged form: staged=<JSON> and command=<argument form>
+func stagedAnswer(st *android.Staged, command string) (string, error) {
+	raw, err := st.StagedJSON()
+	if err != nil {
+		return "", err
+	}
+	return "staged=" + raw + "\n" + lineIf("command=", command), nil
 }

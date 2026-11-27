@@ -127,3 +127,35 @@ func TestEnforceNodeBinding(t *testing.T) {
 		t.Errorf("invalid: %v", err)
 	}
 }
+
+func TestAndroidLegacySetup(t *testing.T) {
+	c, err := Load(env(valid()))
+	if err != nil || !c.AndroidLegacySetup {
+		t.Fatalf("the legacy setup is allowed by default: %v %v", c.AndroidLegacySetup, err)
+	}
+	v := valid()
+	v["MDM_ANDROID_LEGACY_SETUP"] = "false"
+	if c, err := Load(env(v)); err != nil || c.AndroidLegacySetup {
+		t.Errorf("false: %v %v", c.AndroidLegacySetup, err)
+	}
+	v["MDM_ANDROID_LEGACY_SETUP"] = "no"
+	if _, err := Load(env(v)); err == nil || !strings.Contains(err.Error(), "MDM_ANDROID_LEGACY_SETUP") {
+		t.Errorf("an invalid value: %v", err)
+	}
+}
+
+func TestHeadwindTLSPin(t *testing.T) {
+	v := valid()
+	v["HMDM_URL"], v["HMDM_PASSWORD"], v["HMDM_SHARED_SECRET"] = "http://hmdm:8080", "p", "0123456789abcdef"
+	pin := "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+	v["HMDM_TLS_PIN"] = pin + ", " + pin
+	if c, err := Load(env(v)); err != nil || c.HeadwindTLSPins != pin+","+pin {
+		t.Errorf("two pins: %q %v", c.HeadwindTLSPins, err)
+	}
+	for _, bad := range []string{"abc", pin + ":x", strings.Repeat(pin+",", 4) + pin, pin + ",,"} {
+		v["HMDM_TLS_PIN"] = bad
+		if _, err := Load(env(v)); err == nil || !strings.Contains(err.Error(), "HMDM_TLS_PIN") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
