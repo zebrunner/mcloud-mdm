@@ -103,7 +103,9 @@ type Manager struct {
 	// MQTTPort is the MQTT port of the agents (TLS for an https PublicURL), CA the DER of a private CA they install
 	MQTTPort int
 	CA       []byte
-	Now      func() time.Time
+	// Pins are the TLS pins of PublicURL for the agents (HMDM_TLS_PIN, comma separated), empty: none
+	Pins string
+	Now  func() time.Time
 
 	mu sync.Mutex
 	// changed is the time of the last preset change of a device: applied once the device synchronized after it
@@ -117,11 +119,14 @@ type Manager struct {
 type Setup struct {
 	Serial    string   `json:"serial"`
 	BaseURL   string   `json:"base_url"`
-	Secret    string   `json:"secret"`
+	Secret    string   `json:"secret,omitempty"`
 	AgentURL  string   `json:"agent_url,omitempty"`
 	ADB       []string `json:"adb"`
 	Configure string   `json:"configure"`
-	Release   string   `json:"release"`
+	Release   string   `json:"release,omitempty"`
+	// Staged is the setup of the staged form of the agent (its features: staged, Android 9+): written to the
+	// provider by content write on stdin, then a call without arguments: the secret is in no command line
+	Staged *Staged `json:"staged,omitempty"`
 	// New: the device was not a device of the server (the default set of the admin UI applies)
 	New bool `json:"new"`
 }
@@ -221,6 +226,14 @@ func (m *Manager) Enroll(serial, name, agentURL string) (*Setup, error) {
 	}
 	if len(m.CA) > 0 {
 		s.Configure += " --extra ca:s:" + base64.StdEncoding.EncodeToString(m.CA)
+	}
+	if m.Pins != "" {
+		s.Configure += " --extra pin:s:" + m.Pins
+	}
+	s.Staged = &Staged{BaseURL: base, ServerProject: project, DeviceID: serial, Secret: m.Secret, Token: m.Secret,
+		MQTTPort: m.MQTTPort, Pin: m.Pins}
+	if len(m.CA) > 0 {
+		s.Staged.CA = base64.StdEncoding.EncodeToString(m.CA)
 	}
 	s.Release = m.ReleaseCommand()
 	s.ADB = []string{

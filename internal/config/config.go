@@ -51,8 +51,14 @@ type Config struct {
 	HeadwindMQTTPort int
 	// HeadwindTLSCAFile is the PEM CA of a private certificate of HeadwindPublicURL: the agents install it (a lab)
 	HeadwindTLSCAFile string
+	// HeadwindTLSPins are the TLS pins of HeadwindPublicURL for the agents (base64 of the SHA-256 of the
+	// SubjectPublicKeyInfo of the certificate, comma separated, 4 at most); empty: none
+	HeadwindTLSPins string
 	// AgentAPK is the Android agent (make agent) served at /android/agent.apk
 	AgentAPK string
+	// AndroidLegacySetup: the nodes get the setup and the release commands with the shared secret in their arguments
+	// (the agents without the staged form); false: the staged form only (the secret on stdin, no command line)
+	AndroidLegacySetup bool
 	// STFURL is the API of STF (MCloud) with an access token STFToken: the names, nodes and locations of the devices
 	// and whether a user has one; empty: no groups and no jobs waiting for free devices
 	STFURL   string
@@ -63,6 +69,22 @@ type Config struct {
 }
 
 var headwindPath = regexp.MustCompile(`^(/[A-Za-z0-9_-]+)?$`)
+
+// tlsPin: the base64 of a SHA-256
+var tlsPin = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
+
+func validPins(pins string) bool {
+	list := strings.Split(pins, ",")
+	if len(list) > 4 {
+		return false
+	}
+	for _, p := range list {
+		if !tlsPin.MatchString(p) {
+			return false
+		}
+	}
+	return true
+}
 
 // Load reads the environment; every invalid variable is reported in the returned error.
 func Load(getenv func(string) string) (*Config, error) {
@@ -93,9 +115,17 @@ func Load(getenv func(string) string) (*Config, error) {
 		HeadwindPublicURL: strings.TrimRight(get("HMDM_PUBLIC_URL", ""), "/"),
 		HeadwindSecret:    get("HMDM_SHARED_SECRET", ""),
 		HeadwindTLSCAFile: get("HMDM_TLS_CA_FILE", ""),
+		HeadwindTLSPins:   strings.ReplaceAll(get("HMDM_TLS_PIN", ""), " ", ""),
 		AgentAPK:          get("MDM_ANDROID_AGENT_APK", "/android/mcloud-mdm-agent.apk"),
 		STFURL:            strings.TrimRight(get("MDM_STF_URL", ""), "/"),
 		STFToken:          get("MDM_STF_TOKEN", ""),
+	}
+	switch v := get("MDM_ANDROID_LEGACY_SETUP", "true"); v {
+	case "true":
+		c.AndroidLegacySetup = true
+	case "false":
+	default:
+		errs = append(errs, fmt.Errorf("MDM_ANDROID_LEGACY_SETUP %q: true or false", v))
 	}
 	switch v := get("MDM_ENFORCE_NODE_BINDING", "false"); v {
 	case "true":
@@ -167,6 +197,10 @@ func Load(getenv func(string) string) (*Config, error) {
 			if _, err := os.Stat(c.HeadwindTLSCAFile); err != nil {
 				errs = append(errs, fmt.Errorf("HMDM_TLS_CA_FILE: %w", err))
 			}
+		}
+		if c.HeadwindTLSPins != "" && !validPins(c.HeadwindTLSPins) {
+			errs = append(errs, fmt.Errorf("HMDM_TLS_PIN %q: 1 to 4 pins separated by commas, each the base64 of the SHA-256 "+
+				"of the public key of the certificate (MCLOUD_TLS_PIN of mcloud-agent)", c.HeadwindTLSPins))
 		}
 		if len(c.HeadwindSecret) < 16 || strings.ContainsAny(c.HeadwindSecret, ": ") {
 			errs = append(errs, errors.New("HMDM_SHARED_SECRET: the SHARED_SECRET of Headwind MDM, 16+ characters without colons or spaces"))

@@ -155,6 +155,23 @@ func TestEnrollCreatesFarmConfiguration(t *testing.T) {
 		!strings.HasSuffix(s2.Configure, " --extra serverProject:s:hmdm --extra mqttPort:i:31443 --extra ca:s:AQID") {
 		t.Errorf("TLS setup under a path: %s", s2.Configure)
 	}
+	// the staged form: the same setup as JSON for the stdin of content write
+	st, err := s.Staged.StagedJSON()
+	if err != nil || st != `{"baseUrl":"https://hmdm.example.com","deviceId":"96JY1BL9Z","secret":"0123456789abcdef","token":"0123456789abcdef"}` {
+		t.Errorf("staged: %s %v", st, err)
+	}
+	pin := "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+	m.Pins = pin + "," + pin
+	if s3, _ := m.Enroll("96JY1BL9Z", "", ""); !strings.HasSuffix(s3.Configure, " --extra ca:s:AQID --extra pin:s:"+m.Pins) {
+		t.Errorf("the pins in the argument form: %s", s3.Configure)
+	} else if st, _ := s3.Staged.StagedJSON(); st != `{"baseUrl":"https://demo.example.com","serverProject":"hmdm","deviceId":"96JY1BL9Z",`+
+		`"secret":"0123456789abcdef","token":"0123456789abcdef","mqttPort":31443,"ca":"AQID","pin":"`+m.Pins+`"}` {
+		t.Errorf("staged with everything: %s", st)
+	}
+	m.Pins, m.MQTTPort, m.CA, m.PublicURL = "", 0, nil, "https://hmdm.example.com"
+	if got := m.StagedRelease(); got != `{"token":"0123456789abcdef"}` {
+		t.Errorf("staged release: %s", got)
+	}
 	if s.Release != "content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:0123456789abcdef" {
 		t.Errorf("release command: %s", s.Release)
 	}

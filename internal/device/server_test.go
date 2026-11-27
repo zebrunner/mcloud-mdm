@@ -31,7 +31,7 @@ func server(t *testing.T) (*Server, *httptest.Server) {
 		t.Fatal(err)
 	}
 	c := &config.Config{PublicURL: "https://m.example.com", SCEPURL: "https://m.example.com/scep",
-		EnrollToken: "0123456789abcdef", ProfileID: "com.example.mdm", OrgName: "Org"}
+		EnrollToken: "0123456789abcdef", ProfileID: "com.example.mdm", OrgName: "Org", AndroidLegacySetup: true}
 	s, err := New(c, &scep.Server{CA: ca, Challenges: scep.NewChallenges(time.Minute), Days: 1, Log: log}, st, log)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +137,26 @@ func TestAndroidEndpoints(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(string(body), "--method release --extra token:s:0123456789abcdef0123") {
 		t.Errorf("release: %d %q", code, body)
 	}
+	// a node with the staged form: the JSON for the stdin of content write and the command of the argument form
+	code, body = get(t, srv.URL+"/android/release?serial=SER001&staged=1", "0123456789abcdef")
+	if code != http.StatusOK || string(body) != "staged={\"token\":\"0123456789abcdef0123\"}\n"+
+		"command=content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:0123456789abcdef0123\n" {
+		t.Errorf("staged release: %d %q", code, body)
+	}
+	// MDM_ANDROID_LEGACY_SETUP=false: the staged form only, no command with the secret in its arguments
+	s.Config.AndroidLegacySetup = false
+	if code, body := get(t, srv.URL+"/android/release?serial=SER001", "0123456789abcdef"); code != http.StatusConflict ||
+		strings.Contains(string(body), "0123456789abcdef0123") {
+		t.Errorf("the argument form refused: %d %q", code, body)
+	}
+	if code, body := get(t, srv.URL+"/android/release?serial=SER001&staged=1", "0123456789abcdef"); code != http.StatusOK ||
+		string(body) != "staged={\"token\":\"0123456789abcdef0123\"}\n" {
+		t.Errorf("the staged form only: %d %q", code, body)
+	}
+	if code, _ := get(t, srv.URL+"/android/enroll?serial=SER001&format=shell", "0123456789abcdef"); code != http.StatusConflict {
+		t.Errorf("an enrollment in the argument form refused: %d", code)
+	}
+	s.Config.AndroidLegacySetup = true
 	if code, _ := get(t, srv.URL+"/android/agent.apk", ""); code != http.StatusNotFound {
 		t.Errorf("no APK: %d", code)
 	}
@@ -342,5 +362,21 @@ func TestNodeBindingOff(t *testing.T) {
 	challenge, _ := s.SCEP.Challenges.New()
 	if udid, ok := s.SCEP.Challenges.Take(challenge); !ok || udid != "" {
 		t.Errorf("a challenge bound without the setting: %q", udid)
+	}
+}
+
+func TestStagedAnswer(t *testing.T) {
+	st := &android.Staged{BaseURL: "https://m.example.com", DeviceID: "SER001", Secret: "s3cr3t0123456789", Token: "s3cr3t0123456789"}
+	body, err := stagedAnswer(st, "content call x")
+	if err != nil || body != `staged={"baseUrl":"https://m.example.com","deviceId":"SER001","secret":"s3cr3t0123456789",`+
+		`"token":"s3cr3t0123456789"}`+"\ncommand=content call x\n" {
+		t.Errorf("answer: %q %v", body, err)
+	}
+	if body, _ := stagedAnswer(st, ""); strings.Contains(body, "command=") {
+		t.Errorf("no command: %q", body)
+	}
+	st.DeviceID = "it's"
+	if _, err := stagedAnswer(st, ""); err == nil {
+		t.Error("a quote in the JSON of a single-quoted shell word")
 	}
 }

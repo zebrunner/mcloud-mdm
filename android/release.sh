@@ -21,9 +21,26 @@ adb_s() { "${adb_cmd[@]}" -s "$serial" "$@"; }
   exit 1
 }
 
-release="$(curl -fsS "${curl_opts[@]}" -H "Authorization: Bearer ${MDM_ENROLL_TOKEN}" -G \
-  --data-urlencode "serial=${serial}" "${MDM_URL%/}/android/release")"
-adb_s shell "$release" > /dev/null
+answer="$(curl -fsS "${curl_opts[@]}" -H "Authorization: Bearer ${MDM_ENROLL_TOKEN}" -G \
+  --data-urlencode "serial=${serial}" --data-urlencode "staged=1" "${MDM_URL%/}/android/release")"
+staged="$(sed -n 's/^staged=//p' <<< "$answer")"
+release="$(sed -n 's/^command=//p' <<< "$answer")"
+if [[ -z "$staged" && -z "$release" ]]; then
+  release="$(head -n 1 <<< "$answer")"
+fi
+# the staged form (an agent with the feature staged, Android 9+): the token on the stdin of content write, never in
+# a command line on the device; else the argument form
+sdk="$(adb_s shell getprop ro.build.version.sdk | tr -dc '0-9')"
+features="$(adb_s shell content call --uri "content://${agent}.mcloud" --method status | tr -d '\r')"
+if [[ -n "$staged" && "${sdk:-0}" -ge 28 && "$features" =~ features=[a-z,]*staged ]]; then
+  printf '%s' "$staged" | adb_s shell content write --uri "content://${agent}.mcloud/release"
+  adb_s shell content call --uri "content://${agent}.mcloud" --method release > /dev/null
+elif [[ -n "$release" ]]; then
+  adb_s shell "$release" > /dev/null
+else
+  echo "release: the agent has no staged release (a new agent, Android 9+) and the server allows no other" >&2
+  exit 1
+fi
 if adb_s shell dpm list-owners | grep -q "${agent}/"; then
   echo "release: ${serial} still has the device owner" >&2
   exit 1
