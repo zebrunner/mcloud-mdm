@@ -89,7 +89,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `MDM_SCEP_URL` | `<MDM_PUBLIC_URL>/scep` | the SCEP URL of the enrollment profile, e.g. plain http of a lab with a self-signed certificate |
 | `MDM_DEVICE_LISTEN` | `:8080` | the device listener: `/scep`, `/mdm/enroll`, `/healthz` |
 | `MDM_ADMIN_LISTEN` | `:8081` | the admin UI, its API (`/api/...`) and the webhook of NanoHUB (`/webhook`) |
-| `MDM_DATA_DIR` | `/data` | the SCEP CA (`scep/`) and the state of the UI (`state.json`, mode 600: it has the unlock tokens of the devices) |
+| `MDM_DATA_DIR` | `/data` | the SCEP CA (`scep/`), the registry of the device identities (`identities.json`, mode 600, [Device identities](#device-identities)) and the state of the UI (`state.json`, mode 600: it has the unlock tokens of the devices) |
 | `NANOHUB_URL` | `http://mdm-nanohub:9004` | the API of NanoHUB |
 | `NANOHUB_API_KEY` | | the API key of NanoHUB; required |
 | `MDM_ENROLL_TOKEN` | | the secret of 16+ characters of `GET /mdm/enroll` (`Authorization: Bearer`); required |
@@ -98,7 +98,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `MDM_ORG_NAME` | `Zebrunner MCloud` | the organization of the profiles and of the SCEP CA |
 | `MDM_TLS_CA_FILE` | | the PEM CA of a self-signed MDM server: the enrollment profile installs it and pins the MDM connection to it |
 | `MDM_CHALLENGE_TTL` | `10m` | the life of the one-time SCEP challenge of an enrollment profile |
-| `MDM_CERT_DAYS` | `365` | the validity of the device identities; the devices renew them with the same identity (RenewalReq) |
+| `MDM_CERT_DAYS` | `365` | the validity of the device identities; a device renews its identity (RenewalReq signed by it) when the registry knows it and it is not revoked |
 | `LOGGER_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR` |
 | `HMDM_URL` | | the API of Headwind MDM, e.g. `http://mdm-hmdm:8080`; empty: no Android |
 | `HMDM_LOGIN` | `admin` | the user of Headwind MDM |
@@ -109,7 +109,7 @@ Then, in the admin UI: upload the APNs push certificate and its key (the tab Pus
 | `HMDM_TLS_CA_FILE` | | the PEM CA of a private certificate of `HMDM_PUBLIC_URL`: the setup installs it on the devices (a lab) |
 | `MDM_ANDROID_AGENT_APK` | `/android/mcloud-mdm-agent.apk` | the agent (`make agent`) served at `/android/agent.apk` |
 | `MDM_STF_URL` | | the API of STF (MCloud, `http://stf-api:3000`): the names, nodes and locations of the devices (the groups of the admin UI), whether a user has a device (the jobs on free devices only); empty: none of them |
-| `MDM_STF_TOKEN` | | an access token of STF (Settings, Keys) for `MDM_STF_URL`, read only |
+| `MDM_STF_TOKEN` | | an access token of STF (Settings, Keys) for `MDM_STF_URL`, read only; of an admin of STF: the device identities of the revoked nodes are revoked too (`GET /api/v1/nodes`, [Device identities](#device-identities)) |
 | `MDM_ENFORCE_NODE_BINDING` | `false` | `true`: a node acts on the MDM of its own devices only ([Node binding](#node-binding)); needs `MDM_STF_URL` and `MDM_STF_TOKEN` |
 
 ## Enrollment
@@ -124,6 +124,16 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 - The user can always remove the MDM profile: iOS refuses an MDM payload in a profile that cannot be removed unless it comes from ADE (checked on iOS 18.7.11). The removal is the `CheckOut` event; the agent enrolls the device again.
 - The removal of the MDM profile removes every profile MDM installed; the DDM declarations come back with the next enrollment (mcloud-mdm notifies DDM after it).
 - Developer Mode, the supervision and the recovery of a device that lost MDM need USB: no MDM command or key exists for them.
+
+### Device identities
+
+The SCEP CA signs the identity of a device (the key of the device, its certificate is the identity of every MDM request) for the one-time challenge of an enrollment profile, or for a renewal signed by the identity itself:
+
+- The server sets the subject: `CN=mcloud-mdm-<udid>-<8 hex digits>` of the profile of `/mdm/enroll?udid=<udid>` (`mcloud-mdm-<8 hex digits>` without a udid, allowed without `MDM_ENFORCE_NODE_BINDING` only), the organization of the CA; the subject of the CSR is never used. A renewal keeps the subject of the identity it renews.
+- The registry (`identities.json` of `MDM_DATA_DIR`, mode 600) keeps every identity signed since its start: serial, subject, udid, the node that asked for the profile (`X-MCloud-Node` of the proxy), origin (`enrollment`, `renewal`, `adopted`), the identity a renewal replaces, the revocation and its reason. Expired identities go after 30 days.
+- A renewal is signed only for an identity of the registry that is not revoked (and still valid for the CA); a renewal replaces the identities renewed from the same identity before (one lineage per device). An identity the registry does not know is refused, but for the identities signed before the registry (the devices enrolled before this version): adopted at their first renewal when the certificate verifies, was signed before the start of the registry, its subject names a udid (`mcloud-mdm-<udid>-...`), that device is enrolled now (the webhook of NanoHUB) and it has no identity of the registry yet. Anything else (e.g. a profile without a udid) enrolls again before the identity expires (`./zebrunner.sh mdm enroll` of mcloud-agent).
+- Revoked: the identities of a device when a new one is signed for its new enrollment profile (`replaced by a new enrollment`) and when a node releases it (`POST /mdm/release`, `released`); the identities of the profiles of a node STF revoked (until its revocation, their renewals too) or deleted (STF deletes revoked nodes only), read from STF every 5 minutes with an `MDM_STF_TOKEN` of an admin (another token: logged, nothing revoked; an empty list of STF revokes nothing); by an admin, `POST /api/identities/revoke` of the admin listener with `{"serial": "<hex>"}`, `{"udid": "<udid>"}` or `{"node": "<label>"}`. `GET /api/identities` lists them.
+- NanoHUB checks the identity of every request against the CA only (`-ca`, no revocation list): a revoked identity keeps working there until it expires or the device enrolls again (the new profile replaces it on the device); the registry stops its renewal and no identity is signed without a fresh challenge. NanoMDM binds the certificate of an enrollment to it at `Authenticate` and does not compare the udid with the subject of the identity, so a node that could get a challenge (any node without `MDM_ENFORCE_NODE_BINDING`, its own devices with it) still holds an identity of the CA until it expires: keep `MDM_CERT_DAYS` as short as the farm can re-enroll, and a leaked CA key means a new CA (every device enrolls again).
 
 ## Android
 
@@ -284,7 +294,8 @@ With `MDM_ENFORCE_NODE_BINDING=true` (off by default: every node acts on every d
 
 Not covered (follow-ups): `HMDM_SHARED_SECRET` is one for the farm and stays in the setup and the release commands
 of the agents (their protocol needs it), now only for the node of the device; NanoHUB does not give the identity of a
-device to the webhook, so the udid of an `Authenticate` is not compared with the subject of its identity.
+device to the webhook, so the udid of an `Authenticate` is not compared with the subject of its identity (the server
+sets that subject, [Device identities](#device-identities)).
 
 ## Keys and certificates
 
@@ -341,7 +352,7 @@ One key and one APK for all the farms. Android updates a device owner app signed
 `mdm.env` (`./zebrunner.sh backup` copies it) and the SCEP CA:
 
 ```bash
-docker cp mcloud-mdm:/data ./mcloud-mdm-data    # scep/ca.key, scep/ca.pem, state.json
+docker cp mcloud-mdm:/data ./mcloud-mdm-data    # scep/ca.key, scep/ca.pem, identities.json, state.json
 ```
 
 ## Deployment of a farm

@@ -20,6 +20,7 @@ import (
 	"github.com/zebrunner/mcloud-mdm/internal/config"
 	"github.com/zebrunner/mcloud-mdm/internal/nanohub"
 	"github.com/zebrunner/mcloud-mdm/internal/profile"
+	"github.com/zebrunner/mcloud-mdm/internal/scep"
 	"github.com/zebrunner/mcloud-mdm/internal/state"
 	"github.com/zebrunner/mcloud-mdm/internal/stf"
 )
@@ -37,6 +38,8 @@ type Server struct {
 	Android *android.Manager
 	// STF is nil without MDM_STF_URL: no groups, no jobs waiting for free devices
 	STF *stf.Client
+	// Identities is the registry of the device identities of the SCEP CA
+	Identities *scep.Registry
 	// AnswerTimeout bounds the wait for the report of a command of a ready profile
 	AnswerTimeout time.Duration
 	// RefreshDelay is the wait after a new enrollment before its DDM notify and ProfileList
@@ -73,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/farm", s.farm)
 	mux.HandleFunc("POST /api/sets/save", s.browser(s.setSave))
 	mux.HandleFunc("POST /api/sets/delete", s.browser(s.setDelete))
+	mux.HandleFunc("GET /api/identities", s.identities)
+	mux.HandleFunc("POST /api/identities/revoke", s.browser(s.identitiesRevoke))
 	mux.HandleFunc("POST /webhook", s.webhook)
 	return s.authorized(mux)
 }

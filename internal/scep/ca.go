@@ -109,8 +109,9 @@ func loadCA(certPath, keyPath string) (*CA, error) {
 	return &CA{Cert: cert, Key: key}, nil
 }
 
-// Issue signs a client certificate of the device for the public key and the subject of the CSR.
-func (ca *CA) Issue(csr *x509.CertificateRequest, days int) (*x509.Certificate, error) {
+// Issue signs a client certificate of the device for the public key of the CSR with the common name of the server
+// (never the subject of the CSR) and the organization of the CA.
+func (ca *CA) Issue(csr *x509.CertificateRequest, commonName string, days int) (*x509.Certificate, error) {
 	serial, err := randomSerial()
 	if err != nil {
 		return nil, err
@@ -118,7 +119,7 @@ func (ca *CA) Issue(csr *x509.CertificateRequest, days int) (*x509.Certificate, 
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      csr.Subject,
+		Subject:      pkix.Name{CommonName: commonName, Organization: ca.Cert.Subject.Organization},
 		NotBefore:    now.Add(-5 * time.Minute),
 		NotAfter:     now.AddDate(0, 0, days),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
