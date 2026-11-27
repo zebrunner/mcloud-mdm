@@ -1,8 +1,20 @@
 diff --git a/app/build.gradle b/app/build.gradle
-index abcf02e..9d9baa4 100644
+index abcf02e..cee39ea 100644
 --- a/app/build.gradle
 +++ b/app/build.gradle
-@@ -55,10 +55,10 @@ android {
+@@ -41,8 +41,9 @@ android {
+         // downgrade the dependency to com.fasterxml.jackson to 2.13.5
+         minSdkVersion 26
+         targetSdkVersion 34
+-        versionCode 15400
+-        versionName "6.40"
++        // MCloud: 6.40 of Headwind MDM, patch level 1 of mcloud-mdm (the TLS pin): an update over MDM compares the code
++        versionCode 15401
++        versionName "6.40.1-mcloud"
+         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+         dataBinding {
+             enabled = true
+@@ -55,10 +56,10 @@ android {
          multiDexEnabled true
 
          // Default URL of the web panel (scheme + host!)
@@ -16,10 +28,21 @@ index abcf02e..9d9baa4 100644
          buildConfigField("String", "SERVER_PROJECT", "\"\"")
          // This parameter manages how the device ID should be set up at first start
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 2aab588..ebb330f 100644
+index 2aab588..be9f58b 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
-@@ -116,6 +116,7 @@
+@@ -109,6 +109,10 @@
+     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_WINDOWS" />
+     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_WIPE_DATA" />
+
++    <!-- MCloud: the broadcasts of the agent to itself (the end of an installation), no other app sends them -->
++    <permission android:name="${applicationId}.permission.MCLOUD_INTERNAL" android:protectionLevel="signature" />
++    <uses-permission android:name="${applicationId}.permission.MCLOUD_INTERNAL" />
++
+     <uses-sdk tools:overrideLibrary="com.google.zxing.client.android" />
+
+     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+@@ -116,6 +120,7 @@
      <uses-feature android:name="android.software.leanback" android:required="false" />
 
      <application
@@ -27,7 +50,7 @@ index 2aab588..ebb330f 100644
          android:icon="@mipmap/ic_launcher"
          android:label="@string/white_app_name"
          android:supportsRtl="true"
-@@ -230,6 +231,12 @@
+@@ -230,6 +235,12 @@
              </intent-filter>
          </receiver>
 
@@ -40,8 +63,40 @@ index 2aab588..ebb330f 100644
          <provider
              android:name="androidx.core.content.FileProvider"
              android:authorities="${applicationId}.provider"
+@@ -240,10 +251,13 @@
+                 android:resource="@xml/provider_paths"/>
+         </provider>
+
++        <!-- MCloud: a stub, nobody binds it -->
+         <service android:name=".pro.service.CheckForegroundApplicationService"
+-            android:exported="true"/>
++            android:exported="false"/>
+
+-        <service android:name=".service.PluginApiService" android:enabled="true" android:exported="true">
++        <!-- MCloud: not for the other apps: its key is public (LIBRARY_API_KEY), its sendPush runs any push (a shell
++             command, the release); a farm has no plugin of Headwind MDM -->
++        <service android:name=".service.PluginApiService" android:enabled="true" android:exported="false">
+             <intent-filter>
+                 <action android:name="com.hmdm.action.Connect" />
+             </intent-filter>
+diff --git a/app/src/main/java/com/hmdm/launcher/App.java b/app/src/main/java/com/hmdm/launcher/App.java
+index d4b4d09..0ae31e3 100644
+--- a/app/src/main/java/com/hmdm/launcher/App.java
++++ b/app/src/main/java/com/hmdm/launcher/App.java
+@@ -31,7 +31,10 @@ public class App extends Application {
+         super.onCreate();
+
+         Picasso.Builder builder = new Picasso.Builder(this);
+-        builder.downloader(new OkHttp3Downloader(this,Integer.MAX_VALUE));
++        // MCloud: the TLS pin of the setup, no user CA (the cache of OkHttp3Downloader(this, Integer.MAX_VALUE))
++        builder.downloader(new OkHttp3Downloader(com.hmdm.launcher.mcloud.Tls.okHttp(new okhttp3.OkHttpClient.Builder())
++                .cache(new okhttp3.Cache(new java.io.File(getCacheDir(), "picasso-cache"), Integer.MAX_VALUE))
++                .build()));
+         Picasso built = builder.build();
+         //built.setIndicatorsEnabled(true);
+         //built.setLoggingEnabled(true);
 diff --git a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
-index d935f09..25f05fe 100644
+index d935f09..f3f0184 100644
 --- a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
 +++ b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
 @@ -203,7 +203,10 @@ public class ConfigUpdater {
@@ -56,6 +111,23 @@ index d935f09..25f05fe 100644
      }
 
      public void skipConfigLoad() {
+@@ -1176,11 +1179,11 @@ public class ConfigUpdater {
+
+         try {
+             Log.d(Const.LOG_TAG, "Install completion receiver registered");
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-                context.registerReceiver(appInstallReceiver, new IntentFilter(Const.ACTION_INSTALL_COMPLETE), Context.RECEIVER_EXPORTED);
+-            } else {
+-                context.registerReceiver(appInstallReceiver, new IntentFilter(Const.ACTION_INSTALL_COMPLETE));
+-            }
++            // MCloud: only the PendingIntent of the agent (InstallUtils.createIntentSender) may report an installation:
++            // another app faked its status (a confirmation intent started by the agent, a failed update)
++            context.registerReceiver(appInstallReceiver, new IntentFilter(Const.ACTION_INSTALL_COMPLETE),
++                    context.getPackageName() + ".permission.MCLOUD_INTERNAL", null,
++                    Build.VERSION.SDK_INT >= 33 ? Context.RECEIVER_NOT_EXPORTED : 0);
+         } catch (Exception e) {
+             // On earlier Android versions (4, 5):
+             // Fatal Exception: android.content.ReceiverCallNotAllowedException
 diff --git a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java b/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
 index eaf0c90..aa8f24a 100644
 --- a/app/src/main/java/com/hmdm/launcher/helper/Initializer.java
@@ -85,10 +157,10 @@ index 8d9a16f..45682e5 100644
 
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
 new file mode 100644
-index 0000000..7332e89
+index 0000000..a1521e2
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/Mqtt.java
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,56 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.content.Context;
@@ -98,13 +170,10 @@ index 0000000..7332e89
 +
 +import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 +
-+import javax.net.ssl.HttpsURLConnection;
-+import javax.net.ssl.SSLSocketFactory;
-+
 +/**
 + * MCloud: MQTT over TLS when the server is https: ssl://<host of the server>:<mqttPort of the setup>, the certificate
-+ * checked by the trust of the device (the network security config: the system CAs and a CA of the setup) and its
-+ * host name verified. A plain http server keeps tcp:// (a lab).
++ * checked like the API (Tls: the pin of the setup, else the system CAs and the CA of the setup, and the host name).
++ * A plain http server keeps tcp:// (a lab).
 + */
 +public final class Mqtt {
 +
@@ -138,8 +207,9 @@ index 0000000..7332e89
 +
 +    public static void configure(Context context, MqttConnectOptions options) {
 +        if (tls(context)) {
-+            options.setSocketFactory(SSLSocketFactory.getDefault());
-+            options.setSSLHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
++            // the factory verifies the server itself: paho 1.2.0 ignores the answer of its hostname verifier
++            options.setSocketFactory(Tls.verifyingSocketFactory());
++            options.setSSLHostnameVerifier(Tls.hostnameVerifier());
 +        }
 +    }
 +
@@ -259,10 +329,10 @@ index 0000000..dcc568e
 +}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
 new file mode 100644
-index 0000000..e6e5e33
+index 0000000..b9f6eb9
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/SetupProvider.java
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,184 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.content.ContentProvider;
@@ -271,20 +341,31 @@ index 0000000..e6e5e33
 +import android.net.Uri;
 +import android.os.Binder;
 +import android.os.Bundle;
++import android.os.ParcelFileDescriptor;
 +
++import com.hmdm.launcher.Const;
 +import com.hmdm.launcher.helper.SettingsHelper;
++import com.hmdm.launcher.util.RemoteLogger;
 +import com.hmdm.launcher.util.Utils;
++
++import java.io.FileNotFoundException;
++import java.security.cert.X509Certificate;
++import java.util.List;
 +
 +/**
 + * MCloud: configures and releases the agent over adb without the screen.
 + *
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup \
 + *     --arg https://mdm.example.com --extra deviceId:s:SERIAL --extra secret:s:SECRET --extra token:s:SECRET \
-+ *     [--extra mqttPort:i:31443] [--extra ca:s:BASE64_OF_THE_CA]
-+ * (MQTT is ssl:// on the host of the server for an https server; ca: the CA of a private certificate, a lab)
++ *     [--extra mqttPort:i:31443] [--extra pin:s:PIN[,PIN]] [--extra ca:s:BASE64_OF_THE_CA]
++ * (MQTT is ssl:// on the host of the server for an https server; pin: base64 of the SHA-256 of the public key of the
++ * server, see Tls; ca: the CA of a private certificate, a lab)
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method release --extra token:s:SECRET
 + * adb shell content call --uri content://com.hmdm.launcher.mcloud --method status
 + * (the url goes in --arg: "content" refuses colons in the values of --extra)
++ *
++ * Android 9+: the same parameters as JSON on the stdin of "content write --uri content://com.hmdm.launcher.mcloud/setup"
++ * (or /release), then the call without arguments: the secret is in no command line, see Staged.
 + *
 + * Only adb shell and root may call it. Every user of adb is the shell uid (the remote debug of the farm too), so once
 + * the agent has its secret, setup and release need it as the token: nobody without the secret of the server moves
@@ -294,11 +375,14 @@ index 0000000..e6e5e33
 +
 +    private static final int SHELL_UID = 2000;
 +    private static final int ROOT_UID = 0;
++    // what this agent accepts, for the enroll scripts: the TLS pin, the staged parameters of "content write"
++    private static final String FEATURES = "pin,staged";
 +
 +    @Override
 +    public boolean onCreate() {
 +        // providers are created before the other components of the app: the secret is ready for all of them
 +        Secret.load(getContext());
++        Tls.init(getContext());
 +        Watchdog.ensure(getContext());
 +        return true;
 +    }
@@ -313,11 +397,39 @@ index 0000000..e6e5e33
 +        }
 +    }
 +
-+    @Override
-+    public Bundle call(String method, String arg, Bundle extras) {
++    private static void checkCaller() {
 +        int uid = Binder.getCallingUid();
 +        if (uid != SHELL_UID && uid != ROOT_UID) {
 +            throw new SecurityException("only adb shell may configure the agent");
++        }
++    }
++
++    @Override
++    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
++        checkCaller();
++        String method = uri.getPath() != null ? uri.getPath().replaceAll("^/+|/+$", "") : "";
++        if (!"setup".equals(method) && !"release".equals(method)) {
++            throw new FileNotFoundException("content write: /setup or /release");
++        }
++        if (mode == null || !mode.startsWith("w")) {
++            throw new FileNotFoundException("content write only");
++        }
++        return Staged.open(method);
++    }
++
++    @Override
++    public Bundle call(String method, String arg, Bundle extras) {
++        checkCaller();
++        if (("setup".equals(method) || "release".equals(method)) && Staged.pending(method)) {
++            // the staged parameters are the whole call: an argument together with them is refused, they stay
++            if (arg != null || (extras != null && !extras.isEmpty())) {
++                throw new IllegalArgumentException("staged parameters: call " + method + " without arguments");
++            }
++            extras = Staged.take(method);
++            if (extras == null) {
++                throw new IllegalArgumentException("the staged parameters expired: write them again");
++            }
++            arg = extras.getString("baseUrl");
 +        }
 +        SettingsHelper settings = SettingsHelper.getInstance(getContext());
 +        if ("setup".equals(method)) {
@@ -334,6 +446,9 @@ index 0000000..e6e5e33
 +            if (secret == null || secret.length() < 16) {
 +                throw new IllegalArgumentException("secret (16+ characters) is required");
 +            }
++            List<String> pins = Tls.parsePins(extras.getString("pin"));
++            String ca = extras.getString("ca");
++            X509Certificate caCert = ca != null && !ca.isEmpty() ? TrustedCa.parse(ca) : null;
 +            settings.setBaseUrl(baseUrl);
 +            settings.setSecondaryBaseUrl(baseUrl);
 +            settings.setServerProject(extras.getString("serverProject", ""));
@@ -344,9 +459,13 @@ index 0000000..e6e5e33
 +                throw new IllegalArgumentException("mqttPort: 1-65535");
 +            }
 +            Mqtt.savePort(getContext(), mqttPort);
-+            String ca = extras.getString("ca");
-+            if (ca != null && !ca.isEmpty() && !TrustedCa.install(getContext(), ca)) {
-+                throw new IllegalStateException("the CA is not installed (the agent must be the device owner)");
++            // every setup replaces the TLS settings; the agent trusts the CA alone, no user CA of the device
++            TrustedCa.uninstall(getContext());
++            TrustedCa.save(getContext(), caCert);
++            Tls.save(getContext(), Uri.parse(baseUrl).getHost(), pins);
++            if (pins.isEmpty() && baseUrl.startsWith("https://")) {
++                RemoteLogger.log(getContext(), Const.LOG_WARN, "Setup without a TLS pin: the agent trusts the "
++                        + "system CAs" + (caCert != null ? " and the CA of the setup" : "") + " for " + baseUrl);
 +            }
 +        } else if ("release".equals(method)) {
 +            if (!Secret.isSet(getContext())) {
@@ -367,6 +486,9 @@ index 0000000..e6e5e33
 +        result.putString("mqtt", settings.isBaseUrlSet() ? Mqtt.uri(getContext(), Uri.parse(settings.getBaseUrl()).getHost(),
 +                com.hmdm.launcher.BuildConfig.MQTT_PORT) : null);
 +        result.putBoolean("caInstalled", TrustedCa.installed(getContext()));
++        result.putBoolean("caTrusted", TrustedCa.trusted(getContext()) != null);
++        result.putBoolean("pinned", Tls.pinned());
++        result.putString("features", FEATURES);
 +        return result;
 +    }
 +
@@ -395,51 +517,704 @@ index 0000000..e6e5e33
 +        return 0;
 +    }
 +}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Staged.java b/app/src/main/java/com/hmdm/launcher/mcloud/Staged.java
+new file mode 100644
+index 0000000..31494b2
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Staged.java
+@@ -0,0 +1,168 @@
++package com.hmdm.launcher.mcloud;
++
++import android.os.Bundle;
++import android.os.ParcelFileDescriptor;
++import android.os.SystemClock;
++
++import org.json.JSONObject;
++
++import java.io.ByteArrayOutputStream;
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++import java.util.Iterator;
++
++/**
++ * MCloud: the parameters of the next setup or release written on the stdin of "content write" (Android 9+): the
++ * secret stays out of the command line of the device, which every process of the shell uid reads in /proc.
++ *
++ * printf '%s' '{"baseUrl": ..., "secret": ..., "token": ...}' | adb shell content write --uri content://com.hmdm.launcher.mcloud/setup
++ * adb shell content call --uri content://com.hmdm.launcher.mcloud --method setup
++ *
++ * The parameters are bound to their method and taken by its next call within TTL_MS, the call has no argument then.
++ */
++final class Staged {
++
++    static final long TTL_MS = 60_000;
++    static final int MAX_BYTES = 64 * 1024;
++    // "content write" returns once its data is in the pipe: the call waits for the end of the reading
++    private static final long READ_WAIT_MS = 10_000;
++
++    private static final Object LOCK = new Object();
++    private static long generation;
++    private static String method;
++    private static boolean reading;
++    private static long stagedAt;
++    private static Bundle params;
++    private static String error;
++
++    private Staged() {
++    }
++
++    /** open returns the end of a pipe "content write" writes the parameters of the method into. */
++    static ParcelFileDescriptor open(String forMethod) throws FileNotFoundException {
++        ParcelFileDescriptor[] pipe;
++        try {
++            pipe = ParcelFileDescriptor.createPipe();
++        } catch (IOException e) {
++            throw new FileNotFoundException("no pipe: " + e.getMessage());
++        }
++        final long current;
++        synchronized (LOCK) {
++            current = ++generation;
++            method = forMethod;
++            reading = true;
++            stagedAt = SystemClock.elapsedRealtime();
++            params = null;
++            error = null;
++        }
++        final ParcelFileDescriptor source = pipe[0];
++        new Thread(() -> read(source, current), "mcloud-staged").start();
++        return pipe[1];
++    }
++
++    private static void read(ParcelFileDescriptor source, long readGeneration) {
++        Bundle parsed = null;
++        String failure = null;
++        try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(source)) {
++            ByteArrayOutputStream out = new ByteArrayOutputStream();
++            byte[] buffer = new byte[4096];
++            int n;
++            while ((n = in.read(buffer)) > 0) {
++                out.write(buffer, 0, n);
++                if (out.size() > MAX_BYTES) {
++                    throw new IllegalArgumentException("the parameters are larger than " + MAX_BYTES + " bytes");
++                }
++            }
++            parsed = bundle(new JSONObject(new String(out.toByteArray(), StandardCharsets.UTF_8)));
++        } catch (IllegalArgumentException e) {
++            failure = e.getMessage();
++        } catch (Exception e) {
++            // never the content: it has the secret
++            failure = "the parameters are not a JSON object";
++        }
++        synchronized (LOCK) {
++            if (readGeneration != generation) {
++                return;
++            }
++            reading = false;
++            params = parsed;
++            error = failure;
++            LOCK.notifyAll();
++        }
++    }
++
++    /** bundle turns the JSON of the parameters into the extras of the call: "baseUrl" is the --arg of the call. */
++    private static Bundle bundle(JSONObject json) throws Exception {
++        Bundle result = new Bundle();
++        Iterator<String> keys = json.keys();
++        while (keys.hasNext()) {
++            String key = keys.next();
++            Object value = json.get(key);
++            if ("mqttPort".equals(key)) {
++                if (!(value instanceof Number)) {
++                    throw new IllegalArgumentException("mqttPort: a number");
++                }
++                result.putInt(key, ((Number) value).intValue());
++            } else if (value instanceof String) {
++                result.putString(key, (String) value);
++            } else if (value != JSONObject.NULL) {
++                throw new IllegalArgumentException(key + ": a string");
++            }
++        }
++        return result;
++    }
++
++    /** pending reports parameters staged for the method, being read or ready. */
++    static boolean pending(String forMethod) {
++        synchronized (LOCK) {
++            return forMethod.equals(method) && SystemClock.elapsedRealtime() - stagedAt <= TTL_MS;
++        }
++    }
++
++    /** take returns the staged parameters of the method once (null: none), or fails with the reason. */
++    static Bundle take(String forMethod) {
++        synchronized (LOCK) {
++            long deadline = SystemClock.elapsedRealtime() + READ_WAIT_MS;
++            while (reading && forMethod.equals(method)) {
++                long left = deadline - SystemClock.elapsedRealtime();
++                if (left <= 0) {
++                    break;
++                }
++                try {
++                    LOCK.wait(left);
++                } catch (InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    break;
++                }
++            }
++            if (!forMethod.equals(method)) {
++                return null;
++            }
++            boolean expired = SystemClock.elapsedRealtime() - stagedAt > TTL_MS;
++            boolean stillReading = reading;
++            Bundle result = params;
++            String failure = error;
++            clear();
++            if (expired) {
++                return null;
++            }
++            if (stillReading) {
++                throw new IllegalStateException("the staged parameters were not written completely");
++            }
++            if (failure != null) {
++                throw new IllegalArgumentException(failure);
++            }
++            return result;
++        }
++    }
++
++    private static void clear() {
++        generation++;
++        method = null;
++        reading = false;
++        params = null;
++        error = null;
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/Tls.java b/app/src/main/java/com/hmdm/launcher/mcloud/Tls.java
+new file mode 100644
+index 0000000..0126994
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/mcloud/Tls.java
+@@ -0,0 +1,431 @@
++package com.hmdm.launcher.mcloud;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.util.Base64;
++import android.util.Log;
++
++import com.hmdm.launcher.Const;
++
++import java.io.IOException;
++import java.net.InetAddress;
++import java.net.Socket;
++import java.security.KeyStore;
++import java.security.MessageDigest;
++import java.security.cert.Certificate;
++import java.security.cert.CertificateException;
++import java.security.cert.X509Certificate;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.LinkedHashSet;
++import java.util.List;
++import java.util.Set;
++
++import javax.net.ssl.HostnameVerifier;
++import javax.net.ssl.HttpsURLConnection;
++import javax.net.ssl.SSLContext;
++import javax.net.ssl.SSLPeerUnverifiedException;
++import javax.net.ssl.SSLSession;
++import javax.net.ssl.SSLSocket;
++import javax.net.ssl.SSLSocketFactory;
++import javax.net.ssl.TrustManager;
++import javax.net.ssl.TrustManagerFactory;
++import javax.net.ssl.X509TrustManager;
++
++import okhttp3.OkHttpClient;
++
++/**
++ * MCloud: the TLS trust of every connection of the agent (the API, the files, MQTT), set by the setup.
++ *
++ * - with a pin (the SHA-256 of the public key of the certificate of the server, MCLOUD_TLS_PIN of the nodes): a
++ *   certificate with a pinned key is the server, whatever its CA, name or dates (the self-signed one of stf-proxy is
++ *   fine, like curl -k --pinnedpubkey of the nodes); the host of the server accepts no other key, even from a public CA
++ * - otherwise the system CAs and the CA of the setup (a lab), never the user CAs: an STF user can add one in Settings
++ *   (network_security_config.xml trusts the system CAs only)
++ *
++ * The state is read at every handshake: the clients built before a setup follow it. A setup also starts a new TLS
++ * context: a session of the trust before it is not resumed (a resumption checks no certificate).
++ */
++public final class Tls {
++
++    private static final String PREFS = "mcloud";
++    private static final String KEY_PINS = "pins";
++    private static final String KEY_PIN_HOST = "pinHost";
++    static final int MAX_PINS = 4;
++    private static final int HANDSHAKE_TIMEOUT_MS = 30_000;
++
++    private static volatile Set<String> pins = Collections.emptySet();
++    // the host of the server: a pin is required there
++    private static volatile String pinHost;
++    private static volatile X509TrustManager caTrust;
++    private static volatile X509TrustManager systemTrust;
++    private static volatile SSLContext sslContext;
++
++    private static final HostnameVerifier PLATFORM_VERIFIER = HttpsURLConnection.getDefaultHostnameVerifier();
++    private static final X509TrustManager TRUST = new Trust();
++    private static final HostnameVerifier VERIFIER = new Verifier();
++    private static final SSLSocketFactory FACTORY = new CurrentFactory();
++    private static final SSLSocketFactory VERIFYING_FACTORY = new VerifyingFactory();
++
++    private Tls() {
++    }
++
++    /** init loads the state of the setup and makes it the default of HttpsURLConnection; once per process. */
++    static synchronized void init(Context context) {
++        load(context);
++        HttpsURLConnection.setDefaultSSLSocketFactory(socketFactory());
++        HttpsURLConnection.setDefaultHostnameVerifier(VERIFIER);
++    }
++
++    static void load(Context context) {
++        SharedPreferences prefs = prefs(context);
++        Set<String> loaded = new LinkedHashSet<>();
++        String saved = prefs.getString(KEY_PINS, "");
++        for (String pin : saved.split(",")) {
++            if (!pin.isEmpty()) {
++                loaded.add(pin);
++            }
++        }
++        pins = Collections.unmodifiableSet(loaded);
++        pinHost = prefs.getString(KEY_PIN_HOST, null);
++        X509Certificate ca = TrustedCa.trusted(context);
++        caTrust = ca != null ? caTrustManager(ca) : null;
++        sslContext = null;
++    }
++
++    /** save keeps the TLS settings of a setup: every setup replaces them, no pin clears the pin. */
++    static void save(Context context, String host, List<String> newPins) {
++        prefs(context).edit()
++                .putString(KEY_PINS, String.join(",", newPins))
++                .putString(KEY_PIN_HOST, host)
++                .commit();
++        load(context);
++    }
++
++    /** parsePins checks the pins of the setup: comma separated base64 of the 32 bytes of a SHA-256. */
++    static List<String> parsePins(String value) {
++        List<String> result = new ArrayList<>();
++        if (value == null || value.trim().isEmpty()) {
++            return result;
++        }
++        for (String pin : value.split(",")) {
++            pin = pin.trim();
++            if (pin.startsWith("sha256//")) {
++                pin = pin.substring("sha256//".length());
++            }
++            byte[] digest;
++            try {
++                digest = Base64.decode(pin, Base64.NO_WRAP);
++            } catch (IllegalArgumentException e) {
++                digest = null;
++            }
++            if (digest == null || digest.length != 32) {
++                throw new IllegalArgumentException("pin: base64 of the SHA-256 of the public key of the server");
++            }
++            String normalized = Base64.encodeToString(digest, Base64.NO_WRAP);
++            if (!result.contains(normalized)) {
++                result.add(normalized);
++            }
++        }
++        if (result.size() > MAX_PINS) {
++            throw new IllegalArgumentException("pin: " + MAX_PINS + " pins at most");
++        }
++        return result;
++    }
++
++    public static boolean pinned() {
++        return !pins.isEmpty();
++    }
++
++    public static X509TrustManager trustManager() {
++        return TRUST;
++    }
++
++    public static HostnameVerifier hostnameVerifier() {
++        return VERIFIER;
++    }
++
++    public static SSLSocketFactory socketFactory() {
++        return FACTORY;
++    }
++
++    /**
++     * verifyingSocketFactory makes sockets that come out of the handshake with the server verified (the pin or the host
++     * name): paho 1.2.0 calls its hostname verifier but ignores the answer.
++     */
++    public static SSLSocketFactory verifyingSocketFactory() {
++        return VERIFYING_FACTORY;
++    }
++
++    private static Socket verified(Socket socket, String host) throws IOException {
++        SSLSocket ssl = (SSLSocket) socket;
++        try {
++            int timeout = ssl.getSoTimeout();
++            ssl.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
++            ssl.startHandshake();
++            ssl.setSoTimeout(timeout);
++            if (host == null || !VERIFIER.verify(host, ssl.getSession())) {
++                throw new SSLPeerUnverifiedException("the TLS certificate of " + host + " is refused");
++            }
++            return ssl;
++        } catch (IOException e) {
++            try {
++                ssl.close();
++            } catch (IOException ignored) {
++                // closed anyway
++            }
++            throw e;
++        }
++    }
++
++    private static SSLContext sslContext() throws IOException {
++        SSLContext context = sslContext;
++        if (context == null) {
++            synchronized (Tls.class) {
++                if (sslContext == null) {
++                    try {
++                        SSLContext created = SSLContext.getInstance("TLS");
++                        created.init(null, new TrustManager[]{TRUST}, null);
++                        sslContext = created;
++                    } catch (Exception e) {
++                        throw new IOException("TLS is not available", e);
++                    }
++                }
++                context = sslContext;
++            }
++        }
++        return context;
++    }
++
++    /** okHttp makes an OkHttp client of the agent trust the server like the rest of the agent. */
++    public static OkHttpClient.Builder okHttp(OkHttpClient.Builder builder) {
++        return builder.sslSocketFactory(socketFactory(), TRUST).hostnameVerifier(VERIFIER);
++    }
++
++    static String pin(Certificate certificate) {
++        try {
++            byte[] digest = MessageDigest.getInstance("SHA-256").digest(certificate.getPublicKey().getEncoded());
++            return Base64.encodeToString(digest, Base64.NO_WRAP);
++        } catch (Exception e) {
++            return "";
++        }
++    }
++
++    private static boolean isPinned(Certificate certificate) {
++        Set<String> current = pins;
++        return !current.isEmpty() && current.contains(pin(certificate));
++    }
++
++    private static X509TrustManager systemTrust() throws CertificateException {
++        X509TrustManager trust = systemTrust;
++        if (trust == null) {
++            trust = trustManager(null);
++            systemTrust = trust;
++        }
++        return trust;
++    }
++
++    private static X509TrustManager caTrustManager(X509Certificate ca) {
++        try {
++            KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
++            store.load(null, null);
++            store.setCertificateEntry("mcloud-ca", ca);
++            return trustManager(store);
++        } catch (Exception e) {
++            Log.w(Const.LOG_TAG, "MCloud: the CA of the setup is not usable: " + e.getMessage());
++            return null;
++        }
++    }
++
++    private static X509TrustManager trustManager(KeyStore store) throws CertificateException {
++        try {
++            TrustManagerFactory factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
++            factory.init(store);
++            for (TrustManager manager : factory.getTrustManagers()) {
++                if (manager instanceof X509TrustManager) {
++                    return (X509TrustManager) manager;
++                }
++            }
++        } catch (Exception e) {
++            throw new CertificateException("no trust manager", e);
++        }
++        throw new CertificateException("no X509 trust manager");
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++
++    private static final class Trust implements X509TrustManager {
++
++        @Override
++        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
++            throw new CertificateException("the agent authenticates no client");
++        }
++
++        @Override
++        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
++            if (chain == null || chain.length == 0) {
++                throw new CertificateException("the server sent no certificate");
++            }
++            if (isPinned(chain[0])) {
++                return;
++            }
++            CertificateException failure;
++            try {
++                systemTrust().checkServerTrusted(chain, authType);
++                return;
++            } catch (CertificateException e) {
++                failure = e;
++            }
++            X509TrustManager ca = caTrust;
++            if (ca != null) {
++                ca.checkServerTrusted(chain, authType);
++                return;
++            }
++            throw failure;
++        }
++
++        @Override
++        public X509Certificate[] getAcceptedIssuers() {
++            List<X509Certificate> issuers = new ArrayList<>();
++            try {
++                Collections.addAll(issuers, systemTrust().getAcceptedIssuers());
++            } catch (CertificateException e) {
++                // the system CAs are not available: the CA of the setup and the pins only
++            }
++            X509TrustManager ca = caTrust;
++            if (ca != null) {
++                Collections.addAll(issuers, ca.getAcceptedIssuers());
++            }
++            return issuers.toArray(new X509Certificate[0]);
++        }
++    }
++
++    /** CurrentFactory makes the sockets of the TLS context of the current setup. */
++    private static final class CurrentFactory extends SSLSocketFactory {
++
++        private static SSLSocketFactory current() throws IOException {
++            return sslContext().getSocketFactory();
++        }
++
++        @Override
++        public String[] getDefaultCipherSuites() {
++            try {
++                return current().getDefaultCipherSuites();
++            } catch (IOException e) {
++                return new String[0];
++            }
++        }
++
++        @Override
++        public String[] getSupportedCipherSuites() {
++            try {
++                return current().getSupportedCipherSuites();
++            } catch (IOException e) {
++                return new String[0];
++            }
++        }
++
++        @Override
++        public Socket createSocket() throws IOException {
++            return current().createSocket();
++        }
++
++        @Override
++        public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException {
++            return current().createSocket(socket, host, port, autoClose);
++        }
++
++        @Override
++        public Socket createSocket(String host, int port) throws IOException {
++            return current().createSocket(host, port);
++        }
++
++        @Override
++        public Socket createSocket(String host, int port, InetAddress localHost, int localPort) throws IOException {
++            return current().createSocket(host, port, localHost, localPort);
++        }
++
++        @Override
++        public Socket createSocket(InetAddress host, int port) throws IOException {
++            return current().createSocket(host, port);
++        }
++
++        @Override
++        public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort)
++                throws IOException {
++            return current().createSocket(address, port, localAddress, localPort);
++        }
++    }
++
++    /** VerifyingFactory makes the connected sockets of CurrentFactory, handshaken and verified. */
++    private static final class VerifyingFactory extends SSLSocketFactory {
++
++        @Override
++        public String[] getDefaultCipherSuites() {
++            return FACTORY.getDefaultCipherSuites();
++        }
++
++        @Override
++        public String[] getSupportedCipherSuites() {
++            return FACTORY.getSupportedCipherSuites();
++        }
++
++        @Override
++        public Socket createSocket() throws IOException {
++            // nothing to verify before the connection: refused rather than unverified
++            throw new IOException("unconnected sockets are not verified");
++        }
++
++        @Override
++        public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException {
++            return verified(FACTORY.createSocket(socket, host, port, autoClose), host);
++        }
++
++        @Override
++        public Socket createSocket(String host, int port) throws IOException {
++            return verified(FACTORY.createSocket(host, port), host);
++        }
++
++        @Override
++        public Socket createSocket(String host, int port, InetAddress localHost, int localPort) throws IOException {
++            return verified(FACTORY.createSocket(host, port, localHost, localPort), host);
++        }
++
++        @Override
++        public Socket createSocket(InetAddress host, int port) throws IOException {
++            return verified(FACTORY.createSocket(host, port), host.getHostAddress());
++        }
++
++        @Override
++        public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort)
++                throws IOException {
++            return verified(FACTORY.createSocket(address, port, localAddress, localPort), address.getHostAddress());
++        }
++    }
++
++    private static final class Verifier implements HostnameVerifier {
++
++        @Override
++        public boolean verify(String host, SSLSession session) {
++            if (!pins.isEmpty()) {
++                try {
++                    Certificate[] peer = session.getPeerCertificates();
++                    if (peer.length > 0 && isPinned(peer[0])) {
++                        return true;
++                    }
++                } catch (SSLPeerUnverifiedException e) {
++                    return false;
++                }
++                String server = pinHost;
++                if (server != null && server.equalsIgnoreCase(host)) {
++                    // no RemoteLogger: it needs this very server
++                    Log.w(Const.LOG_TAG, "MCloud: the TLS key of " + host + " is not the pinned one, refused");
++                    return false;
++                }
++            }
++            return PLATFORM_VERIFIER.verify(host, session);
++        }
++    }
++}
 diff --git a/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
 new file mode 100644
-index 0000000..f375ff7
+index 0000000..a374e18
 --- /dev/null
 +++ b/app/src/main/java/com/hmdm/launcher/mcloud/TrustedCa.java
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,111 @@
 +package com.hmdm.launcher.mcloud;
 +
 +import android.app.admin.DevicePolicyManager;
 +import android.content.Context;
 +import android.content.SharedPreferences;
 +import android.util.Base64;
++import android.util.Log;
 +
++import com.hmdm.launcher.Const;
 +import com.hmdm.launcher.util.LegacyUtils;
 +
++import java.io.ByteArrayInputStream;
++import java.security.cert.CertificateFactory;
++import java.security.cert.X509Certificate;
++
 +/**
-+ * MCloud: the CA of a server with a private certificate (a lab), installed by the device owner as a user CA without
-+ * a prompt; the network security config of the agent trusts the user CAs. Removed again by the release.
++ * MCloud: the CA of a server with a private certificate (a lab), trusted by the agent alone (Tls). The agents before
++ * the TLS pin installed it as a user CA of the device and trusted the user CAs: the next setup or the release removes
++ * that one (the agent trusts its saved copy until then).
 + */
 +final class TrustedCa {
 +
 +    private static final String PREFS = "mcloud";
-+    private static final String KEY = "ca";
++    private static final String KEY = "trustedCa";
++    // the CA installed as a user CA of the device by the agents before the TLS pin
++    private static final String KEY_INSTALLED = "ca";
 +
 +    private TrustedCa() {
 +    }
 +
-+    /** install installs the CA (base64 of the DER or of the PEM) and returns true when it is installed. */
-+    static boolean install(Context context, String base64) {
-+        byte[] cert = Base64.decode(base64, Base64.DEFAULT);
-+        String text = new String(cert, java.nio.charset.StandardCharsets.US_ASCII);
-+        if (text.contains("-----BEGIN CERTIFICATE-----")) {
-+            String body = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
-+            cert = Base64.decode(body, Base64.DEFAULT);
++    /** parse reads the CA of the setup: base64 of the DER or of the PEM. */
++    static X509Certificate parse(String base64) {
++        try {
++            byte[] cert = Base64.decode(base64, Base64.DEFAULT);
++            String text = new String(cert, java.nio.charset.StandardCharsets.US_ASCII);
++            if (text.contains("-----BEGIN CERTIFICATE-----")) {
++                String body = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
++                cert = Base64.decode(body, Base64.DEFAULT);
++            }
++            return (X509Certificate) CertificateFactory.getInstance("X.509")
++                    .generateCertificate(new ByteArrayInputStream(cert));
++        } catch (Exception e) {
++            throw new IllegalArgumentException("ca: base64 of the DER or of the PEM of a certificate");
 +        }
-+        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
-+        boolean ok = dpm.installCaCert(LegacyUtils.getAdminComponentName(context), cert);
-+        if (ok) {
-+            prefs(context).edit().putString(KEY, Base64.encodeToString(cert, Base64.NO_WRAP)).commit();
-+        }
-+        return ok;
 +    }
 +
-+    static boolean installed(Context context) {
++    /** save keeps the CA of a setup for the agent, null removes it. */
++    static void save(Context context, X509Certificate ca) {
++        SharedPreferences.Editor editor = prefs(context).edit();
++        if (ca == null) {
++            editor.remove(KEY);
++        } else {
++            try {
++                editor.putString(KEY, Base64.encodeToString(ca.getEncoded(), Base64.NO_WRAP));
++            } catch (Exception e) {
++                throw new IllegalArgumentException("ca: not encodable");
++            }
++        }
++        editor.commit();
++    }
++
++    /** trusted is the CA the agent trusts besides the system CAs, null without one. */
++    static X509Certificate trusted(Context context) {
 +        String saved = prefs(context).getString(KEY, null);
++        if (saved == null) {
++            saved = prefs(context).getString(KEY_INSTALLED, null);
++        }
++        if (saved == null) {
++            return null;
++        }
++        try {
++            return (X509Certificate) CertificateFactory.getInstance("X.509")
++                    .generateCertificate(new ByteArrayInputStream(Base64.decode(saved, Base64.NO_WRAP)));
++        } catch (Exception e) {
++            return null;
++        }
++    }
++
++    /** installed reports a user CA of the device installed by an agent before the TLS pin. */
++    static boolean installed(Context context) {
++        String saved = prefs(context).getString(KEY_INSTALLED, null);
 +        if (saved == null) {
 +            return false;
 +        }
@@ -451,14 +1226,19 @@ index 0000000..f375ff7
 +        }
 +    }
 +
++    /** uninstall removes the user CA of the device installed by an agent before the TLS pin (the device owner). */
 +    static void uninstall(Context context) {
-+        String saved = prefs(context).getString(KEY, null);
++        String saved = prefs(context).getString(KEY_INSTALLED, null);
 +        if (saved == null) {
 +            return;
 +        }
 +        DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
-+        dpm.uninstallCaCert(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
-+        prefs(context).edit().remove(KEY).commit();
++        try {
++            dpm.uninstallCaCert(LegacyUtils.getAdminComponentName(context), Base64.decode(saved, Base64.NO_WRAP));
++            prefs(context).edit().remove(KEY_INSTALLED).commit();
++        } catch (SecurityException e) {
++            Log.w(Const.LOG_TAG, "MCloud: the user CA of the device is not removed: " + e.getMessage());
++        }
 +    }
 +
 +    private static SharedPreferences prefs(Context context) {
@@ -534,6 +1314,36 @@ index 4aeffdc..9ab7d4b 100644
          Initializer.init(context, () -> {
              Initializer.startServicesAndLoadConfig(context);
 
+diff --git a/app/src/main/java/com/hmdm/launcher/receiver/SimChangedReceiver.java b/app/src/main/java/com/hmdm/launcher/receiver/SimChangedReceiver.java
+index 85fba27..3a77b5c 100644
+--- a/app/src/main/java/com/hmdm/launcher/receiver/SimChangedReceiver.java
++++ b/app/src/main/java/com/hmdm/launcher/receiver/SimChangedReceiver.java
+@@ -31,6 +31,12 @@ public class SimChangedReceiver extends BroadcastReceiver {
+
+     @Override
+     public void onReceive(final Context context, final Intent intent) {
++        // MCloud: the receiver is exported (the system sends the broadcast): another app sending it without the
++        // extras crashed the process of the agent
++        if (!"android.intent.action.SIM_STATE_CHANGED".equals(intent.getAction()) || intent.getExtras() == null
++                || intent.getExtras().getString("ss") == null) {
++            return;
++        }
+         // SIM card changed, log the new IMSI and number
+         String phoneNumber = null;
+         try {
+diff --git a/app/src/main/java/com/hmdm/launcher/server/ServerServiceKeeper.java b/app/src/main/java/com/hmdm/launcher/server/ServerServiceKeeper.java
+index 8760f02..d9f645b 100644
+--- a/app/src/main/java/com/hmdm/launcher/server/ServerServiceKeeper.java
++++ b/app/src/main/java/com/hmdm/launcher/server/ServerServiceKeeper.java
+@@ -91,6 +91,8 @@ public class ServerServiceKeeper {
+                     connectTimeout(Const.CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS).
+                     readTimeout(readTimeout, TimeUnit.MILLISECONDS).
+                     writeTimeout(Const.CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS);
++            // MCloud: the TLS pin of the setup, no user CA
++            com.hmdm.launcher.mcloud.Tls.okHttp(clientBuilder);
+             builder.client(clientBuilder.build());
+         }
+
 diff --git a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java b/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
 index 3c5cf8c..2a1acde 100644
 --- a/app/src/main/java/com/hmdm/launcher/service/PushLongPollingService.java
@@ -578,11 +1388,35 @@ index f778868..654a664 100644
              if (!calculatedSignature.equalsIgnoreCase(serverSignature)) {
                  errorText = "Server signature " + serverSignature + " doesn't match calculated signature " + calculatedSignature + ", dropping response";
                  Log.e(Const.LOG_TAG, errorText);
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/BaseAppListAdapter.java b/app/src/main/java/com/hmdm/launcher/ui/BaseAppListAdapter.java
+index 7f7e67b..550e487 100644
+--- a/app/src/main/java/com/hmdm/launcher/ui/BaseAppListAdapter.java
++++ b/app/src/main/java/com/hmdm/launcher/ui/BaseAppListAdapter.java
+@@ -136,7 +136,8 @@ public abstract class BaseAppListAdapter extends RecyclerView.Adapter<BaseAppLis
+                         // Add signature to all requests to protect against unauthorized API calls
+                         // For TRUST_ANY_CERTIFICATE, we won't add signatures because it's unsafe anyway
+                         // and is just a workaround to use Headwind MDM on the LAN
+-                        OkHttpClient clientWithSignature = new OkHttpClient.Builder()
++                        // MCloud: the TLS pin of the setup, no user CA
++                        OkHttpClient clientWithSignature = com.hmdm.launcher.mcloud.Tls.okHttp(new OkHttpClient.Builder())
+                                 .cache(new Cache(new File(parentActivity.getApplication().getCacheDir(), "image_cache"), 1000000L))
+                                 .addInterceptor(chain -> {
+                                     okhttp3.Request.Builder requestBuilder = chain.request().newBuilder();
 diff --git a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
-index 3cf4d12..b3153fd 100644
+index 3cf4d12..bb31750 100644
 --- a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
 +++ b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
-@@ -2507,15 +2507,8 @@ public class MainActivity
+@@ -1899,7 +1899,8 @@ public class MainActivity
+                         // Add signature to all requests to protect against unauthorized API calls
+                         // For TRUST_ANY_CERTIFICATE, we won't add signatures because it's unsafe anyway
+                         // and is just a workaround to use Headwind MDM on the LAN
+-                        OkHttpClient clientWithSignature = new OkHttpClient.Builder()
++                        // MCloud: the TLS pin of the setup, no user CA
++                        OkHttpClient clientWithSignature = com.hmdm.launcher.mcloud.Tls.okHttp(new OkHttpClient.Builder())
+                                 .cache(new Cache(new File(getApplication().getCacheDir(), "image_cache"), 1000000L))
+                                 .addInterceptor(chain -> {
+                                     okhttp3.Request.Builder requestBuilder = chain.request().newBuilder();
+@@ -2507,15 +2508,8 @@ public class MainActivity
          }
 
          if (Utils.isDeviceOwner(this)) {
@@ -601,7 +1435,7 @@ index 3cf4d12..b3153fd 100644
 
          if (preferences.getInt(Const.PREFERENCES_DISABLE_LOCATION, Const.PREFERENCES_OFF) == Const.PREFERENCES_ON) {
 diff --git a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
-index fd9a389..0cf8eec 100644
+index fd9a389..49737fa 100644
 --- a/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
 +++ b/app/src/main/java/com/hmdm/launcher/util/InstallUtils.java
 @@ -420,7 +420,7 @@ public class InstallUtils {
@@ -613,6 +1447,15 @@ index fd9a389..0cf8eec 100644
          } catch (Exception e) {
          }
          return null;
+@@ -478,6 +478,8 @@ public class InstallUtils {
+
+     public static IntentSender createIntentSender(Context context, int sessionId, String packageName) {
+         Intent intent = new Intent(Const.ACTION_INSTALL_COMPLETE);
++        // MCloud: to the agent only (the receiver of ConfigUpdater)
++        intent.setPackage(context.getPackageName());
+         if (packageName != null) {
+             intent.putExtra(Const.PACKAGE_NAME, packageName);
+         }
 diff --git a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
 index a3f58c1..d0f2d47 100644
 --- a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
@@ -707,3 +1550,19 @@ index 13b1da3..3ac11e8 100644
          } catch (Exception e) {
          }
 
+diff --git a/app/src/main/res/xml/network_security_config.xml b/app/src/main/res/xml/network_security_config.xml
+index 7d50fce..25794c1 100644
+--- a/app/src/main/res/xml/network_security_config.xml
++++ b/app/src/main/res/xml/network_security_config.xml
+@@ -1,9 +1,9 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <network-security-config>
+     <base-config cleartextTrafficPermitted="true">
++        <!-- MCloud: no user CA (an STF user can add one in Settings); the pin and the CA of the setup: mcloud/Tls -->
+         <trust-anchors>
+             <certificates src="system"/>
+-            <certificates src="user"/>
+         </trust-anchors>
+     </base-config>
+ </network-security-config>
+\ No newline at end of file
