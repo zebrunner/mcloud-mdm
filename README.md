@@ -34,7 +34,7 @@ The images are `public.ecr.aws/zebrunner/mcloud-mdm`: CI publishes every merge i
 
 ## Run
 
-NanoHUB trusts the SCEP CA of mcloud-mdm (`-ca` of the shared data volume) and posts its webhook to the admin listener:
+NanoHUB trusts the SCEP CA of mcloud-mdm (`-ca`) and posts its webhook to the admin listener. It gets the certificate of the CA only, never the data volume (`scep/ca.key`, `state.json` with the unlock tokens of the devices): a one-shot service copies `scep/ca.pem` into a volume of its own at every start (MCloud: `mcloud-mdm-ca`):
 
 ```yaml
 services:
@@ -48,21 +48,36 @@ services:
       MDM_ADMIN_TOKEN: ${MDM_ADMIN_TOKEN}
     volumes:
       - mdm-data:/data
+  mdm-ca:
+    image: alpine:3.24
+    entrypoint: ["/bin/sh", "-c", "cp /mdm-data/scep/ca.pem /ca/ca.pem.new && chmod 644 /ca/ca.pem.new && mv -f /ca/ca.pem.new /ca/ca.pem"]
+    network_mode: none
+    volumes:
+      - mdm-data:/mdm-data:ro
+      - mdm-ca:/ca
+    depends_on:
+      mdm:
+        condition: service_healthy
+    restart: "no"
   mdm-nanohub:
     image: ghcr.io/micromdm/nanohub:0.2.0
     environment:
       NANOHUB_API_KEY: ${NANOHUB_API_KEY}
-      NANOHUB_CA: /mdm-data/scep/ca.pem
+      NANOHUB_CA: /mdm-ca/ca.pem
       NANOHUB_STORAGE: mysql
       NANOHUB_STORAGE_DSN: nanohub:${MYSQL_PASSWORD}@tcp(mdm-mysql:3306)/nanohub?parseTime=true
       NANOHUB_WEBHOOK_URL: http://admin:${MDM_ADMIN_TOKEN}@mdm:8081/webhook
     volumes:
-      - mdm-data:/mdm-data:ro
+      - mdm-ca:/mdm-ca:ro
+    depends_on:
+      mdm-ca:
+        condition: service_completed_successfully
 volumes:
   mdm-data:
+  mdm-ca:
 ```
 
-The proxy publishes `/mdm` and `/checkin` of NanoHUB and `/scep`, `/mdm/enroll` of mcloud-mdm on the address of `MDM_PUBLIC_URL`; the admin UI behind the authentication of MCloud. The SCEP CA is created at the first start (`/data/scep/ca.pem`, `ca.key`); start NanoHUB after it.
+The proxy publishes `/mdm` and `/checkin` of NanoHUB and `/scep`, `/mdm/enroll` of mcloud-mdm on the address of `MDM_PUBLIC_URL`; the admin UI behind the authentication of MCloud. The SCEP CA is created at the first start (`/data/scep/ca.pem`, `ca.key`); start NanoHUB after it (`mdm-ca` above).
 
 Then, in the admin UI: upload the APNs push certificate and its key (the tab Push certificate), and the agents can enroll the devices.
 
@@ -114,7 +129,8 @@ P12_PASSWORD=... ios profile add enroll.mobileconfig --p12file=supervision.p12 -
 
 Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of the Android agents: their configurations, the MQTT push and the device info. It serves plain http and MQTT inside; the proxy terminates TLS (`proxy.conf`): https under `/hmdm` of the domain of the farm (`HMDM_PUBLIC_URL`, the proxy strips the prefix) and MQTT over TLS on the same host (`HMDM_MQTT_PORT`, 31443 -> 31000). No DNS name or certificate of its own.
 
-- `android/hmdm-entrypoint.sh` (the entrypoint of `hmdm`) writes the context of the web application at every start: `base.url` is `HMDM_PUBLIC_URL`, `secure.enrollment=1` (the agents sign their requests with `SHARED_SECRET`: nobody else enrolls or reads a configuration, checked: an unsigned request is refused).
+- `android/hmdm-entrypoint.sh` (the entrypoint of `hmdm`) writes the context of the web application at every start: `base.url` is `HMDM_PUBLIC_URL`, `secure.enrollment=1` (the agents sign their requests with `SHARED_SECRET`: nobody else enrolls or reads a configuration, checked: an unsigned request is refused), `mqtt.auth=1` and `mqtt.admin.password` = `HMDM_MQTT_ADMIN_PASSWORD` (required, 16+ letters and digits; it stops otherwise).
+- The MQTT broker of Headwind MDM (ActiveMQ inside `hmdm`, `mqtt.auth=1`) has two users: `hmdm`, the agents, with the password `SHA1("hmdm" + SHARED_SECRET)`: they read their pushes, publish nothing; `admin`, Headwind MDM itself (it publishes the pushes, the commands), with `mqtt.admin.password`. Without that parameter Headwind MDM uses a default admin password built into it, the same in every installation: whoever reaches the broker (31443 from the site) could publish commands to every agent. Nothing else uses the admin: mcloud-mdm sends the pushes through the API of Headwind MDM. The check: an MQTT `CONNECT` of `admin` with the default password is refused (`CONNACK` "not authorized"), e.g. `mosquitto_pub -h <farm> -p 31443 --capath /etc/ssl/certs -u admin -P <the default password> -t x -m x` from the site, or `-h mcloud-mdm-hmdm -p 31000` inside its docker network.
 - `android/hmdm-init.sh` (a one-shot service on the `postgres` image) sets `HMDM_PASSWORD` (Headwind MDM asks for a new password at its first start) and points the URLs of the files of the applications to `HMDM_PUBLIC_URL`; with `HMDM_INTERNAL_URL` it waits for the web application first (the init.sql of the first start would bring the reset back) and applies it again for a minute.
 - The web panel and the API of the admins are never published: mcloud-mdm reaches them inside, the panel is for `ssh -L` only. Tomcat logs "Error creating SSLContext" of its unused 8443 connector: harmless.
 
@@ -131,6 +147,7 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
       BASE_DOMAIN: demo.zebrunner.farm
       HMDM_PUBLIC_URL: https://demo.zebrunner.farm/hmdm
       SHARED_SECRET: ${HMDM_SHARED_SECRET}
+      HMDM_MQTT_ADMIN_PASSWORD: ${HMDM_MQTT_ADMIN_PASSWORD}
       HMDM_URL: https://h-mdm.com/files/hmdm-5.41.1-os.war
       CLIENT_VERSION: "6.40"
     volumes:
@@ -204,7 +221,7 @@ The history of the commands is kept in memory (the last 300). The agent also sta
 
 ## Infrastructure
 
-A stack per farm next to its MCloud (not one for all the farms: the farms of different customers stay apart, and a farm already has its domain, its certificate, its proxy and its LDAP login). Shared by the farms: the APNs push certificate (the same one in every NanoHUB, renewed once a year) and the signing key of the agent (one APK). Per farm: `MDM_ENROLL_TOKEN`, `HMDM_SHARED_SECRET`, `HMDM_PASSWORD` and the supervision identity (a device moving to another farm is supervised again). About 1.5-2 GB of RAM per farm, mostly Headwind MDM.
+A stack per farm next to its MCloud (not one for all the farms: the farms of different customers stay apart, and a farm already has its domain, its certificate, its proxy and its LDAP login). Shared by the farms: the APNs push certificate (the same one in every NanoHUB, renewed once a year) and the signing key of the agent (one APK). Per farm: `MDM_ENROLL_TOKEN`, `HMDM_SHARED_SECRET`, `HMDM_PASSWORD`, `HMDM_MQTT_ADMIN_PASSWORD` and the supervision identity (a device moving to another farm is supervised again). About 1.5-2 GB of RAM per farm, mostly Headwind MDM.
 
 | Part | iOS | Android |
 | --- | --- | --- |
@@ -213,11 +230,11 @@ A stack per farm next to its MCloud (not one for all the farms: the farms of dif
 | the proxy of MCloud publishes | `/mdm`, `/checkin` (NanoHUB), `/scep`, `/mdm/enroll` (mcloud-mdm) | `/android/enroll`, `/android/release`, `/android/agent.apk` (mcloud-mdm), `/hmdm/` (the agent paths of Headwind MDM), MQTT over TLS 31443 |
 | from the devices | https to the domain of the farm | https to the domain of the farm, TLS to its port 31443 |
 | outbound | APNs: `api.push.apple.com` 443 | none (no Google services) |
-| secrets | the APNs push certificate, the supervision identity, `MDM_ENROLL_TOKEN` | the signing key of the agent, `HMDM_SHARED_SECRET` (the token and the MQTT password of the agents), `HMDM_PASSWORD` |
+| secrets | the APNs push certificate, the supervision identity, `MDM_ENROLL_TOKEN` | the signing key of the agent, `HMDM_SHARED_SECRET` (the token and the MQTT password of the agents), `HMDM_PASSWORD`, `HMDM_MQTT_ADMIN_PASSWORD` (the publisher of the MQTT broker) |
 | on the device host | go-ios: supervision, the profile, `ios pair`, Developer Mode | adb: `android/enroll.sh`, `android/release.sh` |
 | the device | supervised (`ios prepare`, it erases) once | no account, a single user; no factory reset |
 
-`proxy.conf` is the MDM part of stf-proxy ([MCloud and mcloud-agent](#mcloud-and-mcloud-agent)): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its nodes leave it by them); the API of NanoHUB, the device listener of mcloud-mdm and the web panel of Headwind MDM stay inside; the admin UI is an ssh tunnel by default, optionally `/mcloud/mdm/` for the admins of STF (LDAP).
+`proxy.conf` is the MDM part of stf-proxy ([MCloud and mcloud-agent](#mcloud-and-mcloud-agent)): every published path and MQTT only from the fixed public addresses of the site of the farm (its devices and its nodes leave it by them); the API of NanoHUB, the device listener of mcloud-mdm and the web panel of Headwind MDM stay inside; the admin UI is an ssh tunnel by default, optionally `/mcloud/mdm/` for the admins of STF (LDAP). Every location sets `X-Forwarded-Proto` (the scheme of the proxy, or of a trusted proxy in front of it), `X-Forwarded-For` and `X-Real-IP` (the address of the connection): the forwarding headers of a client never reach NanoHUB, mcloud-mdm or Headwind MDM.
 
 ## MCloud and mcloud-agent
 
@@ -226,7 +243,7 @@ Everything goes through the domain and the proxy of the farm: no DNS name, certi
 MCloud (zebrunner/mcloud):
 
 - the compose profile `mdm` (as `adb-relay`): `mdm`, `mdm-nanohub`, `mdm-mysql`, `hmdm`, `hmdm-postgres`, `hmdm-init`, switched on by `MDM_ENABLED=true` of `.env`; the image tags in `TAG_*`;
-- `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `MDM_ADMIN_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`; `MDM_PUBLIC_URL` is `STF_URL`;
+- `zebrunner.sh setup` generates `mdm.env` (mode 600, not the `variables.env` of STF): `MDM_ENROLL_TOKEN`, `MDM_ADMIN_TOKEN`, `NANOHUB_API_KEY`, `MYSQL_PASSWORD`, `HMDM_SQL_PASS`, `HMDM_PASSWORD`, `HMDM_SHARED_SECRET`, `HMDM_MQTT_ADMIN_PASSWORD` (`hmdm` only); `MDM_PUBLIC_URL` is `STF_URL`;
 - stf-proxy: the locations of `proxy.conf` (the addresses of the site and `MDM_ENROLL_TOKEN` rendered by the setup), its stream server on 31443 with the certificate of stf-proxy (`configuration/stf-proxy/ssl`), port 31443 published; a farm whose TLS ends before stf-proxy (a load balancer) terminates 31443 there too;
 - the admin UI on `127.0.0.1:${MDM_ADMIN_PORT}` (9101) of the server only, by default: an ssh tunnel (`ssh -L 9101:127.0.0.1:9101 <server>`, then `http://127.0.0.1:9101`); optionally (`MDM_ADMIN_PUBLIC=true`) `/mcloud/mdm/` behind `/_hub_auth/admin` (the admins of STF) with `Host: $http_host` (the UI compares it with the Origin of its POSTs).
 
@@ -384,7 +401,7 @@ Three tabs: iOS, Android and Server (`#ios`, `#android`, `#server` in the URL).
 | Target | What it checks |
 | --- | --- |
 | `make lint` | `tests/lint.sh`: the shared linters, gofmt, go vet, go mod tidy |
-| `make test` | `go test -race ./...`: SCEP (one-time challenges, renewal), the profiles, the state, the admin API, the webhook and Android (a fake Headwind MDM) |
+| `make test` | `go test -race ./...`: SCEP (one-time challenges, renewal), the profiles, the state, the admin API, the webhook, Android (a fake Headwind MDM) and `android/hmdm-entrypoint.sh` (the context it writes) |
 | `make docker` | `tests/image_test.sh`: the image, its configuration, exit codes, startup, both listeners and the CA kept in the volume |
 | `make agent` | builds the Android agent (not part of `make check`) |
 | `make check` | all of them |
