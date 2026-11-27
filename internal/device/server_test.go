@@ -1,6 +1,9 @@
 package device
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net/http"
@@ -32,7 +35,11 @@ func server(t *testing.T) (*Server, *httptest.Server) {
 	}
 	c := &config.Config{PublicURL: "https://m.example.com", SCEPURL: "https://m.example.com/scep",
 		EnrollToken: "0123456789abcdef", ProfileID: "com.example.mdm", OrgName: "Org"}
-	s, err := New(c, &scep.Server{CA: ca, Challenges: scep.NewChallenges(time.Minute), Days: 1, Log: log}, st, log)
+	reg, err := scep.OpenRegistry(dir + "/identities.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(c, &scep.Server{CA: ca, Challenges: scep.NewChallenges(time.Minute), Days: 1, Log: log, Registry: reg}, st, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +210,23 @@ func TestIOSStatusAndRelease(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(string(body), `"enrolled":"yes"`) || !strings.Contains(string(body), `"product":"iPhone11,8"`) {
 		t.Errorf("enrolled device: %d %s", code, body)
 	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	csr, _ := x509.ParseCertificateRequest(der)
+	crt, err := s.SCEP.CA.Issue(csr, scep.SubjectPrefix(udid)+"1A2B3C4D", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SCEP.Registry.Record(crt, scep.Identity{UDID: udid, Origin: scep.OriginEnrollment}); err != nil {
+		t.Fatal(err)
+	}
 	code, body = post(t, srv.URL+"/mdm/release?udid="+udid+"&format=shell", token)
+	if id, _ := s.SCEP.Registry.Get(scep.SerialOf(crt)); !id.Revoked() || id.Reason != "released" {
+		t.Errorf("the identity of the released device is not revoked: %+v", id)
+	}
 	if code != http.StatusAccepted || !strings.Contains(string(body), "command=CMD-1") ||
 		len(cmds.sent) != 1 || cmds.sent[0] != udid+" RemoveProfile" || cmds.args[0]["Identifier"] != "com.example.mdm" {
 		t.Errorf("release: %d %q %v %v", code, body, cmds.sent, cmds.args)
@@ -312,8 +335,9 @@ func TestNodeBinding(t *testing.T) {
 			challenge = pm["PayloadContent"].(map[string]any)["Challenge"].(string)
 		}
 	}
-	if udid, ok := s.SCEP.Challenges.Take(challenge); !ok || udid != ownUDID {
-		t.Errorf("the challenge is not bound to the device: %q %v", udid, ok)
+	if g, ok := s.SCEP.Challenges.Take(challenge); !ok || g.UDID != ownUDID || !g.Bound || g.Node != "node-a" ||
+		!strings.HasPrefix(g.Subject, scep.SubjectPrefix(ownUDID)) {
+		t.Errorf("the challenge is not bound to the device: %+v %v", g, ok)
 	}
 	// STF does not answer: refused too
 	nodes.err = io.ErrUnexpectedEOF
@@ -339,8 +363,30 @@ func TestNodeBindingOff(t *testing.T) {
 	if len(nodes.calls) != 0 {
 		t.Errorf("STF asked without the setting: %v", nodes.calls)
 	}
-	challenge, _ := s.SCEP.Challenges.New()
-	if udid, ok := s.SCEP.Challenges.Take(challenge); !ok || udid != "" {
-		t.Errorf("a challenge bound without the setting: %q", udid)
+	// without the setting the challenge still signs the identity of the device and its subject, the CSR is not checked
+	code, body := call(t, http.MethodGet, srv.URL+"/mdm/enroll?udid=00008020-0005308201DA00FF", "node-a")
+	if code != http.StatusOK {
+		t.Fatalf("enroll: %d %s", code, body)
 	}
+	g, ok := s.SCEP.Challenges.Take(profileChallenge(t, body))
+	if !ok || g.Bound || g.UDID != "00008020-0005308201DA00FF" || g.Node != "node-a" ||
+		!strings.HasPrefix(g.Subject, scep.SubjectPrefix("00008020-0005308201DA00FF")) {
+		t.Errorf("the grant without the setting: %+v %v", g, ok)
+	}
+}
+
+// profileChallenge is the SCEP challenge of an enrollment profile
+func profileChallenge(t *testing.T, body []byte) string {
+	t.Helper()
+	var m map[string]any
+	if _, err := plist.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range m["PayloadContent"].([]any) {
+		if pm := p.(map[string]any); pm["PayloadType"] == "com.apple.security.scep" {
+			return pm["PayloadContent"].(map[string]any)["Challenge"].(string)
+		}
+	}
+	t.Fatal("no SCEP payload")
+	return ""
 }

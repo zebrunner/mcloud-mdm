@@ -3,6 +3,7 @@ package stf
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,33 @@ func TestDeviceNode(t *testing.T) {
 	var none *Client
 	if _, _, err := none.DeviceNode("U1"); err == nil {
 		t.Error("no client")
+	}
+}
+
+func TestNodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path != "/api/v1/nodes":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Header.Get("Authorization") != "Bearer admin":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"success":false}`))
+		default:
+			_, _ = w.Write([]byte(`{"nodes":[{"label":"node-a","status":"active","revokedAt":null},
+				{"label":"node-b","status":"revoked","revokedAt":"2026-11-20T10:00:00.000Z"}]}`))
+		}
+	}))
+	defer srv.Close()
+	nodes, err := New(srv.URL, "admin").Nodes()
+	if err != nil || len(nodes) != 2 || nodes[1].Label != "node-b" || nodes[1].Status != "revoked" ||
+		nodes[1].RevokedAt != "2026-11-20T10:00:00.000Z" || nodes[0].RevokedAt != "" {
+		t.Errorf("nodes: %+v %v", nodes, err)
+	}
+	if _, err := New(srv.URL, "user").Nodes(); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("a token that is not of an admin: %v", err)
+	}
+	var none *Client
+	if _, err := none.Nodes(); err == nil {
+		t.Error("a nil client")
 	}
 }

@@ -115,19 +115,20 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no APNs push certificate: upload it in the admin UI first", http.StatusServiceUnavailable)
 		return
 	}
-	// the binding of the nodes: the challenge signs the identity of this device only
-	bound := ""
-	if s.Config.EnforceNodeBinding {
-		bound = udid
-	}
-	challenge, err := s.SCEP.Challenges.NewFor(bound)
-	if err != nil {
-		http.Error(w, "challenge failed", http.StatusInternalServerError)
-		return
-	}
 	subject := "mcloud-mdm-" + nanohub.NewUUID()[:8]
 	if udid != "" {
 		subject = scep.SubjectPrefix(udid) + nanohub.NewUUID()[:8]
+	}
+	// the challenge signs the identity of this subject (the server sets it, not the CSR) for the device and the node of
+	// the call (the registry of the identities); with the binding of the nodes the CSR must be of the device too
+	grant := scep.Grant{Subject: subject, UDID: udid, Bound: s.Config.EnforceNodeBinding}
+	if node := r.Header.Get(NodeHeader); nodeLabel.MatchString(node) {
+		grant.Node = node
+	}
+	challenge, err := s.SCEP.Challenges.Issue(grant)
+	if err != nil {
+		http.Error(w, "challenge failed", http.StatusInternalServerError)
+		return
 	}
 	data, err := profile.Enrollment{
 		ID: s.Config.ProfileID, OrgName: s.Config.OrgName, ServerURL: s.Config.PublicURL + "/mdm",
@@ -360,6 +361,16 @@ func (s *Server) iosRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("ios release sent", "udid", udid, "command", id, "remote", r.RemoteAddr)
+	// the device leaves MDM: its identities renew no more (NanoHUB itself checks the CA only)
+	if s.SCEP != nil && s.SCEP.Registry != nil {
+		revoked, err := s.SCEP.Registry.RevokeUDID(udid, "released", "")
+		if err != nil {
+			s.Log.Error("the identities of the released device not revoked", "udid", udid, "err", err)
+		}
+		for _, x := range revoked {
+			s.Log.Info("device identity revoked", "serial", x.Serial, "udid", udid, "reason", x.Reason)
+		}
+	}
 	answer(w, r, http.StatusAccepted, [][2]string{{"udid", udid}, {"command", id}})
 }
 

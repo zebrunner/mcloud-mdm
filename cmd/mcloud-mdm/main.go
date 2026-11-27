@@ -104,16 +104,26 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("state: %w", err)
 	}
-	scepServer := &scep.Server{CA: ca, Challenges: scep.NewChallenges(cfg.ChallengeTTL), Days: cfg.CertDays, Log: log.With("unit", "scep")}
+	reg, err := scep.OpenRegistry(filepath.Join(cfg.DataDir, "identities.json"))
+	if err != nil {
+		return fmt.Errorf("the registry of the device identities: %w", err)
+	}
+	log.Info("the registry of the device identities: renewals of identities it knows only", "since", reg.Since().Format(time.RFC3339),
+		"identities", len(reg.List()))
+	scepServer := &scep.Server{CA: ca, Challenges: scep.NewChallenges(cfg.ChallengeTTL), Days: cfg.CertDays,
+		Log: log.With("unit", "scep"), Registry: reg, Enrolled: st.Enrolled}
 	dev, err := device.New(cfg, scepServer, st, log.With("unit", "device"))
 	if err != nil {
 		return err
 	}
 	adm := &admin.Server{Config: cfg, NanoHUB: nanohub.New(cfg.NanoHUBURL, cfg.NanoHUBKey), State: st,
-		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second}
+		Log: log.With("unit", "admin"), AnswerTimeout: 30 * time.Second, RefreshDelay: 3 * time.Second, Identities: reg}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if cfg.STFURL != "" {
 		adm.STF = stf.New(cfg.STFURL, cfg.STFToken)
 		dev.Nodes = adm.STF
+		go syncNodes(ctx, adm.STF, reg, log.With("unit", "identities"), nodeSyncInterval)
 	}
 	if cfg.EnforceNodeBinding {
 		log.Info("MDM_ENFORCE_NODE_BINDING: the nodes act on the MDM of their own devices only (STF, " + device.NodeHeader + ")")
@@ -158,8 +168,6 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	log.Info("mcloud-mdm started", "version", version, "device", cfg.DeviceListen, "admin", cfg.AdminListen,
 		"public", cfg.PublicURL, "scep", cfg.SCEPURL, "nanohub", cfg.NanoHUBURL, "headwind", cfg.HeadwindURL)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	select {
 	case err = <-errs:
 	case <-ctx.Done():
@@ -170,4 +178,49 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		_ = srv.Shutdown(shutdown)
 	}
 	return err
+}
+
+// nodeSyncInterval: how often the revocations of the nodes of STF are read
+const nodeSyncInterval = 5 * time.Minute
+
+// syncNodes revokes the device identities of the nodes STF revoked or deleted, at the start and every interval; a
+// failure of STF (e.g. an access token that is not of an admin) is logged, nothing is revoked then
+func syncNodes(ctx context.Context, client *stf.Client, reg *scep.Registry, log *slog.Logger, interval time.Duration) {
+	failing := false
+	for {
+		nodes, err := client.Nodes()
+		switch {
+		case err != nil && !failing:
+			failing = true
+			log.Warn("the nodes of STF are not read: the identities of revoked nodes are not revoked (MDM_STF_TOKEN of an admin)", "err", err)
+		case err == nil:
+			if failing {
+				log.Info("the nodes of STF are read again")
+			}
+			failing = false
+			status := make([]scep.NodeStatus, 0, len(nodes))
+			for _, n := range nodes {
+				ns := scep.NodeStatus{Label: n.Label, Revoked: n.Status == "revoked"}
+				if t, err := time.Parse(time.RFC3339, n.RevokedAt); err == nil {
+					ns.RevokedAt = t
+				} else if ns.Revoked {
+					// a revoked node of an unknown time: all of its identities
+					ns.RevokedAt = time.Now()
+				}
+				status = append(status, ns)
+			}
+			revoked, err := reg.RevokeNodes(status)
+			for _, id := range revoked {
+				log.Info("device identity revoked", "serial", id.Serial, "udid", id.UDID, "node", id.Node, "reason", id.Reason)
+			}
+			if err != nil {
+				log.Error("the identities of the revoked nodes", "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
 }

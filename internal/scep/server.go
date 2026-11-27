@@ -1,11 +1,16 @@
 package scep
 
 import (
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/smallstep/pkcs7"
 	"github.com/smallstep/scep"
@@ -23,6 +28,11 @@ type Server struct {
 	Challenges *Challenges
 	Days       int
 	Log        *slog.Logger
+	// Registry keeps the signed identities: a renewal is signed for a known identity that is not revoked only
+	Registry *Registry
+	// Enrolled reports whether the device of the udid is enrolled (the webhook of NanoHUB): an identity signed before
+	// the registry is adopted at its first renewal only for an enrolled device (adopt)
+	Enrolled func(udid string) bool
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -93,30 +103,131 @@ func (s *Server) answer(msg *scep.PKIMessage) (*scep.PKIMessage, error) {
 	if msg.CSRReqMessage == nil || msg.CSR == nil {
 		return fail("no CSR", scep.BadRequest)
 	}
+	var grant Grant
+	var parent *Identity
 	switch msg.MessageType {
 	case scep.PKCSReq:
-		udid, ok := s.Challenges.Take(msg.ChallengePassword)
+		g, ok := s.Challenges.Take(msg.ChallengePassword)
 		if !ok {
 			return fail("the challenge is unknown, used or expired", scep.BadRequest)
 		}
 		// a challenge of a profile for one device (the binding of the nodes) signs the identity of that device only
-		if udid != "" && !strings.HasPrefix(msg.CSR.Subject.CommonName, SubjectPrefix(udid)) {
-			return fail("the CSR is not of the device of the challenge "+udid, scep.BadRequest)
+		if g.Bound && g.UDID != "" && !strings.HasPrefix(msg.CSR.Subject.CommonName, SubjectPrefix(g.UDID)) {
+			return fail("the CSR is not of the device of the challenge "+g.UDID, scep.BadRequest)
 		}
+		grant = g
 	case scep.RenewalReq:
 		if !s.CA.Issued(msg.SignerCert) {
 			return fail("the renewal is not signed by a valid identity of the CA", scep.BadMessageCheck)
 		}
+		id, reason := s.renewable(msg.SignerCert)
+		if id == nil {
+			return fail("the renewal of the identity "+SerialOf(msg.SignerCert)+": "+reason, scep.BadMessageCheck)
+		}
+		parent = id
+		// the identity keeps its subject, its device and its node
+		grant = Grant{Subject: id.Subject, UDID: id.UDID, Node: id.Node}
 	default:
 		return fail("unsupported message type", scep.BadRequest)
 	}
 	if err := msg.CSR.CheckSignature(); err != nil {
 		return fail("the CSR signature is invalid", scep.BadMessageCheck)
 	}
-	crt, err := s.CA.Issue(msg.CSR, s.Days)
+	subject := grant.Subject
+	if subject == "" {
+		subject = "mcloud-mdm-" + randomHex8()
+		if grant.UDID != "" {
+			subject = SubjectPrefix(grant.UDID) + randomHex8()
+		}
+	}
+	crt, err := s.CA.Issue(msg.CSR, subject, s.Days)
 	if err != nil {
 		return nil, err
 	}
-	s.Log.Info("device identity issued", "subject", crt.Subject.String(), "type", string(msg.MessageType), "until", crt.NotAfter)
+	if err := s.record(crt, grant, parent); err != nil {
+		// an identity the registry does not know would not renew: none is given
+		return nil, fmt.Errorf("the registry of the identities: %w", err)
+	}
+	s.Log.Info("device identity issued", "subject", crt.Subject.String(), "serial", SerialOf(crt), "udid", grant.UDID,
+		"node", grant.Node, "type", string(msg.MessageType), "until", crt.NotAfter)
 	return msg.Success(s.CA.Cert, s.CA.Key, crt)
+}
+
+func randomHex8() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// renewable returns the identity of the registry a renewal signed by cert renews, or nil and the reason of the refusal
+func (s *Server) renewable(cert *x509.Certificate) (*Identity, string) {
+	if s.Registry == nil {
+		return &Identity{Serial: SerialOf(cert), Subject: cert.Subject.CommonName, UDID: UDIDOfSubject(cert.Subject.CommonName)}, ""
+	}
+	id, known := s.Registry.Get(SerialOf(cert))
+	switch {
+	case known && id.Revoked():
+		return nil, "revoked (" + id.Reason + ")"
+	case known:
+		return &id, ""
+	}
+	return s.adopt(cert)
+}
+
+// adopt takes an identity signed before the registry into it at its first renewal, the safest rule that keeps the
+// devices enrolled before it: the certificate verifies (the caller checked it), was signed before the start of the
+// registry (every later one is in it), its common name names a udid (mcloud-mdm-<udid>-...) of a device enrolled now
+// and the device has no identity of the registry yet (a newer enrollment replaced the old ones). Anything else is
+// refused: the device enrolls again.
+func (s *Server) adopt(cert *x509.Certificate) (*Identity, string) {
+	since := s.Registry.Since()
+	// Issue backdates NotBefore by 5 minutes
+	if !cert.NotBefore.Add(5 * time.Minute).Before(since) {
+		return nil, "unknown, signed after the start of the registry"
+	}
+	udid := UDIDOfSubject(cert.Subject.CommonName)
+	if udid == "" {
+		return nil, "unknown, its subject names no device"
+	}
+	if s.Enrolled == nil || !s.Enrolled(udid) {
+		return nil, "unknown, its device " + udid + " is not enrolled"
+	}
+	if s.Registry.Active(udid) {
+		return nil, "unknown, the device " + udid + " has a newer identity"
+	}
+	id := Identity{UDID: udid, Origin: OriginAdopted, IssuedAt: cert.NotBefore.UTC().Format(time.RFC3339)}
+	if err := s.Registry.Record(cert, id); err != nil {
+		return nil, "unknown, not adopted: " + err.Error()
+	}
+	s.Log.Warn("device identity signed before the registry adopted at its renewal", "serial", SerialOf(cert),
+		"subject", cert.Subject.CommonName, "udid", udid)
+	adopted, _ := s.Registry.Get(SerialOf(cert))
+	return &adopted, ""
+}
+
+// record keeps the new identity: an enrollment replaces the identities of its device, a renewal the identities
+// renewed from the same one before (one lineage per device)
+func (s *Server) record(crt *x509.Certificate, g Grant, parent *Identity) error {
+	if s.Registry == nil {
+		return nil
+	}
+	id := Identity{UDID: g.UDID, Node: g.Node, Origin: OriginEnrollment}
+	if parent != nil {
+		id.Origin, id.Parent = OriginRenewal, parent.Serial
+	}
+	if err := s.Registry.Record(crt, id); err != nil {
+		return err
+	}
+	serial := SerialOf(crt)
+	var revoked []Identity
+	var err error
+	if parent == nil {
+		revoked, err = s.Registry.RevokeUDID(g.UDID, "replaced by a new enrollment", serial)
+	} else {
+		revoked, err = s.Registry.RevokeChildren(parent.Serial, "replaced by a newer renewal", serial)
+	}
+	for _, r := range revoked {
+		s.Log.Info("device identity revoked", "serial", r.Serial, "udid", r.UDID, "reason", r.Reason)
+	}
+	return err
 }

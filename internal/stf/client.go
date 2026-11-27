@@ -156,3 +156,41 @@ func (c *Client) DeviceNode(serial string) (node string, found bool, err error) 
 	}
 	return data.Device.Node, true, nil
 }
+
+// Node is an enrolled node of STF: active or revoked (since RevokedAt, RFC 3339).
+type Node struct {
+	Label     string `json:"label"`
+	Status    string `json:"status"`
+	RevokedAt string `json:"revokedAt"`
+}
+
+// Nodes are the enrolled nodes of STF, active and revoked (GET /api/v1/nodes: an access token of an admin).
+func (c *Client) Nodes() ([]Node, error) {
+	if c == nil {
+		return nil, fmt.Errorf("STF: no MDM_STF_URL")
+	}
+	req, err := http.NewRequest(http.MethodGet, c.URL+"/api/v1/nodes", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("STF: %d %s", resp.StatusCode, strings.TrimSpace(string(body[:min(len(body), 200)])))
+	}
+	var data struct {
+		Nodes *[]Node `json:"nodes"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("STF: %w", err)
+	}
+	if data.Nodes == nil {
+		return nil, fmt.Errorf("STF: no list of the nodes")
+	}
+	return *data.Nodes, nil
+}
