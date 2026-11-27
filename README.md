@@ -153,13 +153,39 @@ Headwind MDM (`headwindmdm/hmdm`, amd64 only, with PostgreSQL) is the server of 
 
 The agent is the launcher of Headwind MDM ([hmdm-android](https://github.com/h-mdm/hmdm-android), Apache-2.0) with `android/agent/hmdm-android.patch`:
 
-- the setup over adb, without the screen: `content call --uri content://com.hmdm.launcher.mcloud --method setup --arg <server> --extra deviceId:s:<serial> --extra secret:s:<secret> --extra token:s:<secret>`; only the uid of adb shell (or root) may call it.
+- the setup over adb, without the screen: `content call --uri content://com.hmdm.launcher.mcloud --method setup --arg <server> --extra deviceId:s:<serial> --extra secret:s:<secret> --extra token:s:<secret> [--extra pin:s:<pin>[,<pin>]]`; only the uid of adb shell (or root) may call it. Android 9+ also takes the same parameters as JSON on the stdin of `content write --uri content://com.hmdm.launcher.mcloud/setup` (then `content call ... --method setup` without arguments, within 60 seconds): the secret is in no command line of the device, see [TLS and setup of the agent](#tls-and-setup-of-the-agent).
 - the shared secret of the server comes with the setup: one APK for every farm. It is the token of the agent too: once set, `setup` and `release` need it. Every user of adb is the shell uid, the remote debug of MCloud too: without the secret nobody moves the device to another server or releases it.
 - the release: the push `mcloudRelease` (the admin UI) or `--method release --extra token:s:<secret>` over adb (`android/release.sh`); the agent removes its device owner (the reset password token first, Android 12 fails otherwise).
 - no `android:testOnly`, no backup: adb cannot remove the device owner (`dpm remove-active-admin`: "non-test admin"), uninstall the agent (`DELETE_FAILED_DEVICE_POLICY_MANAGER`), clear its data or disable it (checked on Android 12). Android keeps the test-only flag of the moment the device owner was set: `android/enroll.sh` sets the device owner of a test-only admin again.
 - no permission dialog of the agent; a crash on the first start without a configuration fixed.
+- no component for the other apps of the device (an app under test): the plugin API of Headwind MDM (`PluginApiService`, its `sendPush` ran any push with the public key `LIBRARY_API_KEY`) and the stub `CheckForegroundApplicationService` are not exported, the end of an installation (`INSTALL_COMPLETE`) reaches the agent only (a signature permission, `RECEIVER_NOT_EXPORTED`), the SIM receiver ignores a broadcast without its extras (it crashed the agent). Exported still: the launcher activity (`HOME`), the setup provider (adb shell and root only), the receivers of the boot, the shutdown and the SIM (a log line), and the components of the system (`BIND_DEVICE_ADMIN`, `BIND_JOB_SERVICE`, `DUMP`).
 
 `make agent AGENT_KEYSTORE=<keystore> AGENT_KEYSTORE_PASSWORD=<password>` builds and signs `bin/mcloud-mdm-agent.apk` in Docker (linux/amd64). Keep the key: Android updates a device owner app signed with the same key only.
+
+### TLS and setup of the agent
+
+The agent checks the server of every connection (the API, the files, MQTT over TLS) itself:
+
+- with the pin of the setup (`pin`: base64 of the SHA-256 of the public key of the certificate of the server, like `MCLOUD_TLS_PIN` of the nodes; several comma separated, 4 at most, for a planned key change): a certificate with a pinned key is the server whatever its CA, name or dates (a self-signed certificate of the proxy is fine); the host of the server accepts no other key, even from a public CA. A new key of the proxy cuts the pinned agents off until their next setup (`./zebrunner.sh mdm enroll` of mcloud-agent): send the old and the new pin before the change.
+- without a pin (an older server): the CAs of the system and the CA of the setup (`ca`, `HMDM_TLS_CA_FILE`), never a user CA of the device (Settings > Security: any user of the device may add one); the setup writes a warning into the device log.
+- MQTT verifies the host name or the pin too (paho 1.2.0 ignored the answer of its host name verifier).
+- every setup replaces these settings (a setup without `pin` removes the pin). The agent trusts the CA of the setup alone: it no longer installs it as a user CA of the device, and its next setup (or the release) removes the one an older agent installed; until then it trusts its saved copy.
+
+`status` (`content call --uri content://com.hmdm.launcher.mcloud --method status`) shows `pinned`, `caTrusted` (a CA of the setup), `caInstalled` (a user CA of an older agent still on the device) and `features=pin,staged` (an older agent has no `features`). The staged parameters (`content write`, Android 9+): one JSON object of the names of the extras, `baseUrl` for `--arg`, `mqttPort` a number:
+
+```bash
+printf '%s' '{"baseUrl": "https://mcloud.example.com", "serverProject": "hmdm", "deviceId": "<serial>", "secret": "<secret>", "token": "<secret>", "mqttPort": 31443, "pin": "<pin>"}' \
+  | adb -s <serial> shell content write --uri content://com.hmdm.launcher.mcloud/setup
+adb -s <serial> shell content call --uri content://com.hmdm.launcher.mcloud --method setup
+```
+
+They are bound to their method (`/setup`, `/release` with `{"token": "<secret>"}`), taken by its next call within 60 seconds, and a call with arguments while they wait is refused. `content` exits 0 on an error too: a script looks for `Result: Bundle[` on its stdout. Checked on an Android 16 emulator (API 36): the API, the APK download and MQTT with the pin of a self-signed certificate; a wrong pin refused, also when a CA of the setup trusts the certificate; the staged setup and release; an agent of the previous patch with a CA of the setup updated in place keeps its server, its next setup removes the user CA.
+
+The rollout of a new agent (version `6.40.1-mcloud`, code 15401; the same signing key, see [Signing key of the Android agent](#signing-key-of-the-android-agent)):
+
+1. `make agent` with the key of the farms; `keytool -printcert -jarfile bin/mcloud-mdm-agent.apk` shows the certificate of the deployed agent.
+2. Publish it: `configuration/mdm/android/mcloud-mdm-agent.apk` of MCloud (`MDM_ANDROID_AGENT_APK`), served at `/android/agent.apk`.
+3. Update the devices: `./zebrunner.sh mdm enroll <devices>` of mcloud-agent (or `android/enroll.sh`) installs it over the old one (`adb install -r`, the device owner and the data stay) and sets it up again, with the pin when the server sends it. Headwind MDM could also install it (a new version of `com.hmdm.launcher` in its configurations: the agent compares the version code), but without a new setup the agent gets no pin.
 
 Every device gets its own configuration `mcloud-<serial>` (a copy of `Common - Minimal`) safe for a farm: the system launcher stays (`runDefaultLauncher`), the agent never grants the permissions of the apps (`ASKALL`) and installs no app but itself, no kiosk. The enrollment on the device host (`android/enroll.sh`, the device on USB, no Google account on it: Android refuses a device owner then):
 
