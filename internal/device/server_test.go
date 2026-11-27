@@ -212,3 +212,135 @@ func TestIOSStatusAndRelease(t *testing.T) {
 		t.Errorf("release by GET: %d", code)
 	}
 }
+
+type fakeNodes struct {
+	nodes map[string]string
+	err   error
+	calls []string
+}
+
+func (f *fakeNodes) DeviceNode(serial string) (string, bool, error) {
+	f.calls = append(f.calls, serial)
+	if f.err != nil {
+		return "", false, f.err
+	}
+	node, ok := f.nodes[serial]
+	return node, ok, nil
+}
+
+func call(t *testing.T, method, url, node string) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, url, nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef")
+	if node != "" {
+		req.Header.Set(NodeHeader, node)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
+}
+
+func TestNodeBinding(t *testing.T) {
+	s, srv := server(t)
+	defer srv.Close()
+	const ownUDID, otherUDID, secret = "00008020-0005308201DA002E", "00008020-0005308201DA00FF", "0123456789abcdef0123"
+	cmds := &fakeCommander{}
+	nodes := &fakeNodes{nodes: map[string]string{ownUDID: "node-a", "SER-A": "node-a", otherUDID: "node-b",
+		"SER-B": "node-b", "SER-FREE": ""}}
+	s.Commands, s.Nodes = cmds, nodes
+	s.Android = &android.Manager{Secret: secret}
+	s.Config.EnforceNodeBinding = true
+	_ = s.State.SetPushCert("com.apple.mgmt.External.t", "2027")
+	if err := s.State.Authenticate(otherUDID, "F71X", "iPhone11,8", "18.7.11"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.State.TokenUpdate(otherUDID, nil); err != nil {
+		t.Fatal(err)
+	}
+	foreign := [][2]string{
+		{http.MethodGet, "/mdm/enroll?udid=" + otherUDID}, {http.MethodGet, "/mdm/status?udid=" + otherUDID},
+		{http.MethodPost, "/mdm/release?udid=" + otherUDID}, {http.MethodGet, "/android/enroll?serial=SER-B"},
+		{http.MethodGet, "/android/status?serial=SER-B"}, {http.MethodGet, "/android/release?serial=SER-B"},
+		{http.MethodGet, "/android/release?serial=SER-FREE"}, {http.MethodGet, "/android/release?serial=SER-UNKNOWN"},
+	}
+	// another node, no node (an older proxy), not a label
+	for _, node := range []string{"node-a", "", "Node A"} {
+		for _, c := range foreign {
+			code, body := call(t, c[0], srv.URL+c[1], node)
+			if code != http.StatusForbidden || string(body) != "forbidden\n" {
+				t.Errorf("%q %s: %d %q", node, c[1], code, body)
+			}
+		}
+	}
+	if len(cmds.sent) != 0 || s.SCEP.Challenges.Pending() != 0 || s.State.Name(otherUDID) != "" {
+		t.Errorf("a refused call acted: %v %d", cmds.sent, s.SCEP.Challenges.Pending())
+	}
+	for _, c := range [][2]string{{http.MethodGet, "/android/release"}, {http.MethodGet, "/mdm/enroll"},
+		{http.MethodGet, "/android/release?serial=a;b"}} {
+		if code, _ := call(t, c[0], srv.URL+c[1], "node-a"); code != http.StatusBadRequest {
+			t.Errorf("%s: %d", c[1], code)
+		}
+	}
+	// the devices of the node
+	if code, body := call(t, http.MethodGet, srv.URL+"/android/release?serial=SER-A", "node-a"); code != http.StatusOK ||
+		!strings.Contains(string(body), "token:s:"+secret) {
+		t.Errorf("release of its own device: %d %q", code, body)
+	}
+	if code, body := call(t, http.MethodGet, srv.URL+"/mdm/status?udid="+ownUDID+"&format=shell", "node-a"); code != http.StatusOK ||
+		!strings.Contains(string(body), "known=no") {
+		t.Errorf("status of its own device: %d %q", code, body)
+	}
+	if code, _ := call(t, http.MethodPost, srv.URL+"/mdm/release?udid="+otherUDID, "node-b"); code != http.StatusAccepted ||
+		len(cmds.sent) != 1 {
+		t.Errorf("release of its own device: %d %v", code, cmds.sent)
+	}
+	code, body := call(t, http.MethodGet, srv.URL+"/mdm/enroll?udid="+ownUDID+"&name=iPhone", "node-a")
+	if code != http.StatusOK {
+		t.Fatalf("enroll of its own device: %d %s", code, body)
+	}
+	var m map[string]any
+	if _, err := plist.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	var challenge string
+	for _, p := range m["PayloadContent"].([]any) {
+		if pm := p.(map[string]any); pm["PayloadType"] == "com.apple.security.scep" {
+			challenge = pm["PayloadContent"].(map[string]any)["Challenge"].(string)
+		}
+	}
+	if udid, ok := s.SCEP.Challenges.Take(challenge); !ok || udid != ownUDID {
+		t.Errorf("the challenge is not bound to the device: %q %v", udid, ok)
+	}
+	// STF does not answer: refused too
+	nodes.err = io.ErrUnexpectedEOF
+	if code, body := call(t, http.MethodGet, srv.URL+"/android/release?serial=SER-A", "node-a"); code != http.StatusServiceUnavailable ||
+		strings.Contains(string(body), secret) {
+		t.Errorf("no STF: %d %q", code, body)
+	}
+}
+
+func TestNodeBindingOff(t *testing.T) {
+	s, srv := server(t)
+	defer srv.Close()
+	nodes := &fakeNodes{nodes: map[string]string{"SER-B": "node-b"}}
+	s.Nodes = nodes
+	s.Android = &android.Manager{Secret: "0123456789abcdef0123"}
+	_ = s.State.SetPushCert("com.apple.mgmt.External.t", "2027")
+	for _, path := range []string{"/android/release", "/android/release?serial=SER-B", "/mdm/enroll",
+		"/mdm/status?udid=00008020-0005308201DA00FF"} {
+		if code, body := call(t, http.MethodGet, srv.URL+path, "node-a"); code != http.StatusOK {
+			t.Errorf("%s: %d %q", path, code, body)
+		}
+	}
+	if len(nodes.calls) != 0 {
+		t.Errorf("STF asked without the setting: %v", nodes.calls)
+	}
+	challenge, _ := s.SCEP.Challenges.New()
+	if udid, ok := s.SCEP.Challenges.Take(challenge); !ok || udid != "" {
+		t.Errorf("a challenge bound without the setting: %q", udid)
+	}
+}

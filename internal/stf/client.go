@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -116,4 +117,42 @@ func (c *Client) fetch() (map[string]Device, error) {
 		out[d.Serial] = v
 	}
 	return out, nil
+}
+
+// DeviceNode is the node STF binds the device to, read now (not the cached list: the binding of the MDM calls of the
+// nodes); found is false for a device STF does not know.
+func (c *Client) DeviceNode(serial string) (node string, found bool, err error) {
+	if c == nil {
+		return "", false, fmt.Errorf("STF: no MDM_STF_URL")
+	}
+	req, err := http.NewRequest(http.MethodGet, c.URL+"/api/v1/devices/"+url.PathEscape(serial)+"?fields=serial,node", nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("STF: %d %s", resp.StatusCode, strings.TrimSpace(string(body[:min(len(body), 200)])))
+	}
+	var data struct {
+		Device *struct {
+			Serial string `json:"serial"`
+			Node   string `json:"node"`
+		} `json:"device"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", false, fmt.Errorf("STF: %w", err)
+	}
+	if data.Device == nil || data.Device.Serial != serial {
+		return "", false, nil
+	}
+	return data.Device.Node, true, nil
 }
